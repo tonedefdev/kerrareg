@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - modules
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - modules/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - modules/status
+  verbs:
+  - get
+  - patch
+  - update
