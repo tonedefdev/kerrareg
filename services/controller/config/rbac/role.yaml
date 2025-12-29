@@ -8,6 +8,7 @@ rules:
   - kerrareg.io
   resources:
   - modules
+  - moduleversions
   verbs:
   - create
   - delete
@@ -20,12 +21,14 @@ rules:
   - kerrareg.io
   resources:
   - modules/finalizers
+  - moduleversions/finalizers
   verbs:
   - update
 - apiGroups:
   - kerrareg.io
   resources:
   - modules/status
+  - moduleversions/status
   verbs:
   - get
   - patch

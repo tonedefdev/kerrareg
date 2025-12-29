@@ -58,8 +58,12 @@ spec:
                 type: object
               versions:
                 items:
+                  description: ModuleVersionSpec defines a specific version of a Kerrareg
+                    Module.
                   properties:
                     checksum:
+                      type: string
+                    fileName:
                       type: string
                     storage:
                       properties:
@@ -84,6 +88,8 @@ spec:
                     version:
                       type: string
                   required:
+                  - fileName
+                  - storage
                   - version
                   type: object
                 type: array
@@ -93,8 +99,45 @@ spec:
             - versions
             type: object
           status:
-            description: ModuleStatus defines the observed state of Module.
+            description: ModuleStatus defines the observed state of a module.
             properties:
+              moduleVersions:
+                items:
+                  description: ModuleVersionSpec defines a specific version of a Kerrareg
+                    Module.
+                  properties:
+                    checksum:
+                      type: string
+                    fileName:
+                      type: string
+                    storage:
+                      properties:
+                        s3:
+                          properties:
+                            config:
+                              properties:
+                                bucket:
+                                  type: string
+                                region:
+                                  type: string
+                              required:
+                              - bucket
+                              - region
+                              type: object
+                            key:
+                              type: string
+                          required:
+                          - key
+                          type: object
+                      type: object
+                    version:
+                      type: string
+                  required:
+                  - fileName
+                  - storage
+                  - version
+                  type: object
+                type: array
               synced:
                 type: boolean
             required:

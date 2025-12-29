@@ -22,10 +22,11 @@ import (
 
 // ModuleSpec defines the desired state of a Kerrareg Module.
 type ModuleSpec struct {
-	Provider      string          `json:"provider"`
-	RepoUrl       string          `json:"repoUrl"`
-	Versions      []ModuleVersion `json:"versions"`
-	StorageConfig StorageConfig   `json:"storageConfig,omitempty"`
+	Provider      string              `json:"provider"`
+	RepoUrl       string              `json:"repoUrl"`
+	Private       bool                `json:"private,omitempty"`
+	StorageConfig StorageConfig       `json:"storageConfig,omitempty"`
+	Versions      []ModuleVersionSpec `json:"versions"`
 }
 
 type StorageConfig struct {
@@ -37,28 +38,17 @@ type AmazonS3Config struct {
 	Region string `json:"region"`
 }
 
-type ModuleVersion struct {
-	Checksum string        `json:"checksum,omitempty"`
-	Version  string        `json:"version"`
-	Storage  ModuleStorage `json:"storage,omitempty"`
-}
-
-// ModuleStatus defines the observed state of Module.
+// ModuleStatus defines the observed state of a module.
 type ModuleStatus struct {
-	Synced bool `json:"synced"`
-}
-
-type ModuleStorage struct {
-	S3 AmazonS3 `json:"s3,omitempty"`
-}
-
-type AmazonS3 struct {
-	Config AmazonS3Config `json:"config,omitempty"`
-	Key    string         `json:"key"`
+	Synced         bool                `json:"synced"`
+	ModuleVersions []ModuleVersionSpec `json:"moduleVersions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Provider",type="string",JSONPath=".spec.provider",description="The provider of the module"
+// +kubebuilder:printcolumn:name="RepoURL",type="string",JSONPath=".spec.repoUrl",description="The source repository URL of the module"
+// +kubebuilder:printcolumn:name="StorageConfig",type="string",JSONPath=".spec.storageConfig",description="The configuration for module storage"
 
 // Module is the Schema for the Modules API.
 type Module struct {
@@ -76,6 +66,50 @@ type ModuleList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Module `json:"items"`
+}
+
+// ModuleVersionSpec defines a specific version of a Kerrareg Module.
+type ModuleVersionSpec struct {
+	Checksum string        `json:"checksum,omitempty"`
+	FileName string        `json:"fileName"`
+	Version  string        `json:"version"`
+	Storage  ModuleStorage `json:"storage"`
+}
+
+type ModuleVersionStatus struct {
+	Synced bool `json:"synced"`
+}
+
+type ModuleStorage struct {
+	S3 *AmazonS3 `json:"s3,omitempty"`
+}
+
+type AmazonS3 struct {
+	Config AmazonS3Config `json:"config,omitempty"`
+	Key    string         `json:"key"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="FileName",type="string",JSONPath=".spec.fileName",description="The auto generated file name for the module version"
+// +kubebuilder:printcolumn:name="Checksum",type="string",JSONPath=".spec.checksum",description="The checksum of the module version"
+
+// ModuleVersion is the Schema for the ModuleVersion API
+type ModuleVersion struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   ModuleVersionSpec   `json:"spec,omitempty"`
+	Status ModuleVersionStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// ModuleVersionList contains a list of ModuleVersion.
+type ModuleVersionList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []ModuleVersion `json:"items"`
 }
 
 // ProviderSpec defines the desired state of a Kerrareg Provider.
@@ -115,10 +149,8 @@ type ProviderList struct {
 
 // ModuleDepotSpec
 type ModuleDepotSpec struct {
-	Name        string `json:"name"`
 	Provider    string `json:"provider"`
 	RepoUrl     string `json:"repoUrl"`
-	Owner       string `json:"owner"`
 	SemVerMatch string `json:"semVerMatch"`
 }
 
@@ -151,4 +183,5 @@ type ModuleDepoList struct {
 func init() {
 	SchemeBuilder.Register(&Module{}, &ModuleList{})
 	SchemeBuilder.Register(&Provider{}, &ProviderList{})
+	SchemeBuilder.Register(&ModuleVersion{}, &ModuleVersionList{})
 }
