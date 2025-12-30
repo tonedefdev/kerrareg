@@ -39,8 +39,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	modulev1alpha1 "defdev.io/kerrareg/services/controller/api/v1alpha1"
-	"defdev.io/kerrareg/services/controller/internal/github"
+	modulev1alpha1 "github.com/tonedefdev/kerrareg/services/controller/api/v1alpha1"
+	"github.com/tonedefdev/kerrareg/services/controller/internal/github"
 )
 
 // KerraregReconciler reconciles a Kerrareg object
@@ -183,7 +183,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			log.Errorf("successfully uploaded module version %s to S3 bucket %s", bucketKey, module.Spec.StorageConfig.S3.Bucket)
 		}
 
-		err = r.Create(ctx, kerraregVersion, &client.CreateOptions{
+		err = r.Update(ctx, kerraregVersion, &client.UpdateOptions{
 			FieldManager: "kerrareg-controller",
 		})
 

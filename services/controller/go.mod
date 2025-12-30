@@ -1,4 +1,4 @@
-module defdev.io/kerrareg/services/controller
+module github.com/tonedefdev/kerrareg/services/controller
 
 go 1.24.0
 

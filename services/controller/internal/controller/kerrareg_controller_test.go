@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	modulev1alpha1 "defdev.io/kerrareg/services/controller/api/v1alpha1"
+	modulev1alpha1 "github.com/tonedefdev/kerrareg/services/controller/api/v1alpha1"
 )
 
 var _ = Describe("Module Controller", func() {

@@ -27,7 +27,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"defdev.io/kerrareg/services/controller/test/utils"
+	"github.com/tonedefdev/kerrareg/services/controller/test/utils"
 )
 
 // namespace where the project is deployed in

@@ -9,7 +9,7 @@ plugins:
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
 projectName: kerrareg
-repo: defdev.io/kerrareg
+repo: github.com/tonedefdev/kerrareg
 resources:
 - api:
     crdVersion: v1
@@ -18,6 +18,6 @@ resources:
   domain: defdev.io
   group: module
   kind: Kerrareg
-  path: defdev.io/kerrareg/api/v1alpha1
+  path: github.com/tonedefdev/kerrareg/api/v1alpha1
   version: v1alpha1
 version: "3"

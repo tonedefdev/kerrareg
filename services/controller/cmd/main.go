@@ -37,8 +37,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	modulev1alpha1 "defdev.io/kerrareg/services/controller/api/v1alpha1"
-	"defdev.io/kerrareg/services/controller/internal/controller"
+	modulev1alpha1 "github.com/tonedefdev/kerrareg/services/controller/api/v1alpha1"
+	"github.com/tonedefdev/kerrareg/services/controller/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 

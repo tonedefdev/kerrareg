@@ -3,11 +3,13 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -16,18 +18,32 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	kerrareg "defdev.io/kerrareg/services/controller/api/v1alpha1"
+	kerrareg "github.com/tonedefdev/kerrareg/services/controller/api/v1alpha1"
 )
 
+var (
+	logger                 *slog.Logger
+	kerraregUseBearerToken *bool
+)
+
+func init() {
+	logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+}
+
 func main() {
+	kerraregUseBearerToken = flag.Bool("use-bearer-token", false, "when true use a bearer token instead of a base64 encoded kubeconfig")
+	flag.Parse()
+
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Get("/.well-known/terraform.json", serviceDiscoveryHandler)
-	r.Get("/terraform/modules/v1/{namespace}/{name}/{system}/versions", getModuleVersions)
-	r.Get("/terraform/modules/v1/{namespace}/{name}/{system}/{version}/download", getDownloadModuleUrl)
-	r.Get("/terraform/modules/v1/download/s3/{bucket}/{region}/{name}/{fileName}", serveModuleFromS3)
+	r.Get("/kerrareg/modules/v1/{namespace}/{name}/{system}/versions", getModuleVersions)
+	r.Get("/kerrareg/modules/v1/{namespace}/{name}/{system}/{version}/download", getDownloadModuleUrl)
+	r.Get("/kerrareg/modules/v1/download/s3/{bucket}/{region}/{name}/{fileName}", serveModuleFromS3)
 	http.ListenAndServeTLS("", "/Users/tonedefdev/Desktop/kerrareg.defdev.io/certificate.crt", "/Users/tonedefdev/Desktop/kerrareg.defdev.io/private.key", r)
 }
 
@@ -46,7 +62,7 @@ type ModuleVersion struct {
 func serviceDiscoveryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	response := ServiceDiscoveryResponse{
-		ModulesURL: "/terraform/modules/v1/",
+		ModulesURL: "/kerrareg/modules/v1/",
 	}
 	json.NewEncoder(w).Encode(response)
 }
@@ -81,19 +97,19 @@ func getDownloadModuleUrl(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	kubeconfig, err := extractKubeconfig(w, r)
 	if err != nil {
-		log.Fatalf("extract kubeconfig error: %v", err)
+		logger.Error("unable to extract kubeconfig from token header", "error", err)
 		return
 	}
 
-	clientset, err := generateKubeClient(kubeconfig)
+	clientset, err := generateKubeClient(kubeconfig, nil, false)
 	if err != nil {
-		log.Fatalf("generate kube client error: %v", err)
+		logger.Error("unable to generate kubeclient", "error", err)
 		return
 	}
 
 	moduleVersion, err := getModuleVersion(clientset, w, r)
-	if moduleVersion == nil || err != nil {
-		log.Fatalf("get module version error: %v", err)
+	if err != nil {
+		logger.Error("unable to get module version", "error", err)
 		return
 	}
 
@@ -109,7 +125,7 @@ func getDownloadModuleUrl(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	w.Header().Set("X-Terraform-Get", fmt.Sprintf("/terraform/modules/v1/download/%s", downloadPath))
+	w.Header().Set("X-Terraform-Get", fmt.Sprintf("/kerrareg/modules/v1/download/%s", downloadPath))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -122,7 +138,7 @@ func serveModuleFromS3(w http.ResponseWriter, r *http.Request) {
 
 	cfg, err := config.LoadDefaultConfig(r.Context(), config.WithRegion(region))
 	if err != nil {
-		log.Printf("unable to load SDK config, %v", err)
+		logger.Error("unable to load SDK config", "error", err)
 	}
 
 	s3Client := s3.NewFromConfig(cfg)
@@ -131,18 +147,18 @@ func serveModuleFromS3(w http.ResponseWriter, r *http.Request) {
 		Key:    aws.String(fmt.Sprintf("%s/%s", name, fileName)),
 	})
 	if err != nil {
-		log.Printf("failed to get module from S3: %v", err)
+		logger.Error("failed to get module from S3 bucket", "error", err, "bucket", bucket)
 	}
-	defer result.Body.Close()
 
 	if result.ChecksumSHA256 == nil {
-		http.Error(w, "s3 checksumSHA256 was nil", http.StatusInternalServerError)
+		logger.Error("failed to get ChecksumSHA256 from S3 bucket", "error", err, "bucket", bucket)
+		http.Error(w, "missing checksum", http.StatusInternalServerError)
 		return
 	}
 
 	if *result.ChecksumSHA256 != checksum {
-		log.Printf("checksum mismatch: got '%s' want '%s'", checksum, *result.ChecksumSHA256)
-		http.Error(w, "s3 checksumSHA256 was nil", http.StatusInternalServerError)
+		logger.Error("checksum mismatch from s3 bucket ChecksumSHA256", "moduleVersionChecksum", checksum, "s3Checksum", *result.ChecksumSHA256)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -156,15 +172,33 @@ func serveModuleFromS3(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func generateKubeClient(kubeconfig []byte) (*kubernetes.Clientset, error) {
-	config, err := clientcmd.NewClientConfigFromBytes(kubeconfig)
-	if err != nil {
-		return nil, err
-	}
+// generateKubeClient creates a new kubernetes client from either a kubeconfig as a byte slice
+// or from a bearerToken. When using a bearerToken this function will use the in-cluster config
+// to generate the necessary rest.Config settings for TLS connections.
+func generateKubeClient(kubeconfig []byte, bearerToken *string, useBearerToken bool) (*kubernetes.Clientset, error) {
+	var clientConfig *rest.Config
+	if useBearerToken {
+		clusterConfig, err := rest.InClusterConfig()
+		if err != nil {
+			return nil, err
+		}
 
-	clientConfig, err := config.ClientConfig()
-	if err != nil {
-		return nil, err
+		clientConfig = &rest.Config{
+			Host:            clusterConfig.Host,
+			APIPath:         clusterConfig.APIPath,
+			BearerToken:     *bearerToken,
+			TLSClientConfig: clusterConfig.TLSClientConfig,
+		}
+	} else {
+		config, err := clientcmd.NewClientConfigFromBytes(kubeconfig)
+		if err != nil {
+			return nil, err
+		}
+
+		clientConfig, err = config.ClientConfig()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	clientset, err := kubernetes.NewForConfig(clientConfig)
@@ -185,7 +219,8 @@ func extractKubeconfig(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	kubeconfigBase64 := strings.ReplaceAll(authHeader, "Bearer ", "")
 	kubeconfig, err := base64.StdEncoding.DecodeString(kubeconfigBase64)
 	if err != nil {
-		log.Fatalf("base64 decode error: %v", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return nil, err
 	}
 
 	return kubeconfig, nil
@@ -193,15 +228,24 @@ func extractKubeconfig(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 
 func getModuleVersions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	kubeconfig, err := extractKubeconfig(w, r)
-	if err != nil {
-		log.Fatalf("extract kubeconfig error: %v", err)
-		return
+	var kubeconfig []byte
+	var bearerToken string
+
+	if *kerraregUseBearerToken {
+		bearerToken = r.Header.Get("Authorization")
+	} else {
+		config, err := extractKubeconfig(w, r)
+		if err != nil {
+			logger.Error("unable to extract kubeconfig", "error", err)
+			return
+		}
+
+		kubeconfig = config
 	}
 
-	clientset, err := generateKubeClient(kubeconfig)
+	clientset, err := generateKubeClient(kubeconfig, &bearerToken, *kerraregUseBearerToken)
 	if err != nil {
-		log.Fatalf("generate kube client error: %v", err)
+		logger.Error("unable to generate kubeclient", "error", err)
 		return
 	}
 
@@ -216,12 +260,12 @@ func getModuleVersions(w http.ResponseWriter, r *http.Request) {
 		Name(name).
 		DoRaw(r.Context())
 	if err != nil {
-		log.Fatalf("get modules error: %v", err)
+		logger.Error("unable to get modules", "error", err)
 	}
 
 	var module kerrareg.Module
 	if err = json.Unmarshal(result, &module); err != nil {
-		log.Fatalf("unmarshal module error: %v", err)
+		logger.Error("unable to unmarshal module", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
