@@ -21,7 +21,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	kerrareg "github.com/tonedefdev/kerrareg/services/controller/api/v1alpha1"
+	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
+	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
 )
 
 var (
@@ -56,7 +57,7 @@ type ModuleVersionsResponse struct {
 }
 
 type ModuleVersion struct {
-	Versions []kerrareg.ModuleVersionSpec `json:"versions"`
+	Versions []versionv1alpha1.ModuleVersionSpec `json:"versions"`
 }
 
 func serviceDiscoveryHandler(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +68,7 @@ func serviceDiscoveryHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r *http.Request) (*kerrareg.ModuleVersion, error) {
+func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r *http.Request) (*versionv1alpha1.ModuleVersion, error) {
 	name := chi.URLParam(r, "name")
 	namespace := chi.URLParam(r, "namespace")
 	version := chi.URLParam(r, "version")
@@ -84,7 +85,7 @@ func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r 
 		return nil, err
 	}
 
-	var moduleVersion kerrareg.ModuleVersion
+	var moduleVersion versionv1alpha1.ModuleVersion
 	if err = json.Unmarshal(result, &moduleVersion); err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return nil, err
@@ -113,14 +114,14 @@ func getDownloadModuleUrl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	checksumQuery := url.QueryEscape(moduleVersion.Spec.Checksum)
+	checksumQuery := url.QueryEscape(*moduleVersion.Spec.Checksum)
 
 	var downloadPath string
-	if moduleVersion.Spec.Storage.S3 != nil {
+	if moduleVersion.Spec.ModuleConfig.StorageConfig.S3 != nil {
 		downloadPath = fmt.Sprintf("s3/%s/%s/%s?fileChecksum=%s",
-			moduleVersion.Spec.Storage.S3.Config.Bucket,
-			moduleVersion.Spec.Storage.S3.Config.Region,
-			moduleVersion.Spec.Storage.S3.Key,
+			moduleVersion.Spec.ModuleConfig.StorageConfig.S3.Bucket,
+			moduleVersion.Spec.ModuleConfig.StorageConfig.S3.Region,
+			moduleVersion.Spec.ModuleConfig.StorageConfig.S3.Key,
 			checksumQuery,
 		)
 	}
@@ -178,17 +179,12 @@ func serveModuleFromS3(w http.ResponseWriter, r *http.Request) {
 func generateKubeClient(kubeconfig []byte, bearerToken *string, useBearerToken bool) (*kubernetes.Clientset, error) {
 	var clientConfig *rest.Config
 	if useBearerToken {
-		clusterConfig, err := rest.InClusterConfig()
+		clientConfig, err := rest.InClusterConfig()
 		if err != nil {
 			return nil, err
 		}
 
-		clientConfig = &rest.Config{
-			Host:            clusterConfig.Host,
-			APIPath:         clusterConfig.APIPath,
-			BearerToken:     *bearerToken,
-			TLSClientConfig: clusterConfig.TLSClientConfig,
-		}
+		clientConfig.BearerToken = *bearerToken
 	} else {
 		config, err := clientcmd.NewClientConfigFromBytes(kubeconfig)
 		if err != nil {
@@ -263,7 +259,7 @@ func getModuleVersions(w http.ResponseWriter, r *http.Request) {
 		logger.Error("unable to get modules", "error", err)
 	}
 
-	var module kerrareg.Module
+	var module modulev1alpha1.Module
 	if err = json.Unmarshal(result, &module); err != nil {
 		logger.Error("unable to unmarshal module", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
