@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
+	storagetypes "kerrareg/services/version/internal/storage/types"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -16,8 +17,9 @@ type AmazonS3Storage struct {
 	client *s3.Client
 }
 
-func (storage *AmazonS3Storage) New(ctx context.Context, moduleVersion *versionv1alpha1.ModuleVersion) error {
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(moduleVersion.Spec.ModuleConfig.StorageConfig.S3.Region))
+// NewClient initializes a new AWS S3 storage client.
+func (storage *AmazonS3Storage) NewClient(ctx context.Context, version *versionv1alpha1.Version) error {
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(version.Spec.ModuleConfigRef.StorageConfig.S3.Region))
 	if err != nil {
 		return fmt.Errorf("unable to load SDK config: %w", err)
 	}
@@ -26,21 +28,22 @@ func (storage *AmazonS3Storage) New(ctx context.Context, moduleVersion *versionv
 	return nil
 }
 
-func (storage *AmazonS3Storage) GetObject(ctx context.Context, moduleVersion *versionv1alpha1.ModuleVersion) {
+func (storage *AmazonS3Storage) GetObject(ctx context.Context, version *versionv1alpha1.Version) {
 
 }
 
-func (storage *AmazonS3Storage) DeleteObject(ctx context.Context, moduleVersion *versionv1alpha1.ModuleVersion) {
+func (storage *AmazonS3Storage) DeleteObject(ctx context.Context, version *versionv1alpha1.Version) {
 
 }
 
-func (storage *AmazonS3Storage) PutObject(ctx context.Context, moduleBytes []byte, moduleVersion *versionv1alpha1.ModuleVersion) error {
+// PutObject puts the Version file in the specified bucket with its computed base64 encoded SHA256 checksum.
+func (storage *AmazonS3Storage) PutObject(ctx context.Context, storagePutObjectInput *storagetypes.StoragePutObjectInput) error {
 	_, err := storage.client.PutObject(ctx, &s3.PutObjectInput{
 		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
-		ChecksumSHA256:    moduleVersion.Spec.Checksum,
-		Bucket:            &moduleVersion.Spec.ModuleConfig.StorageConfig.S3.Bucket,
-		Key:               &moduleVersion.Spec.ModuleConfig.StorageConfig.S3.Key,
-		Body:              bytes.NewReader(moduleBytes),
+		ChecksumSHA256:    storagePutObjectInput.Checksum,
+		Bucket:            &storagePutObjectInput.Version.Spec.ModuleConfigRef.StorageConfig.S3.Bucket,
+		Key:               storagePutObjectInput.FileDestinationPath,
+		Body:              bytes.NewReader(storagePutObjectInput.FileBytes),
 	})
 	if err != nil {
 		return err

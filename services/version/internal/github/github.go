@@ -19,26 +19,30 @@ import (
 	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
 )
 
-// jwtTransport is a custom HTTP transport that adds the JWT to the Authorization header
+// jwtTransport is a custom HTTP transport that adds the JWT to the Authorization header.
 type jwtTransport struct {
 	Transport http.RoundTripper
 	JWT       string
 }
 
+// GithubClientConfig defines the configuration for an authenticated Github client.
 type GithubClientConfig struct {
-	AppID          int64
+	// The Github application's ID.
+	AppID int64
+	// The Github application's install ID.
 	InstallationID int64
+	// The Github application's private key as a byte slice.
 	PrivateKeyData []byte
 }
 
-// CreateGithubClient creates an authenticated client with the provided GithubClientConfig
-// Otherwise it creates a default client suitable only for accessing public repositories
-func CreateGithubClient(ctx context.Context, moduleVersion *versionv1alpha1.ModuleVersion, githubConfig *GithubClientConfig) (*github.Client, error) {
-	if moduleVersion.Spec.ModuleConfig.GithubClientConfig.UseAuthenticatedClient && githubConfig == nil {
-		return nil, fmt.Errorf("module '%s' is marked to UseAuthenticatedClient but GithubClientConfig is nil", moduleVersion.Spec.ModuleConfig.Name)
+// CreateGithubClient creates an authenticated client with the provided GithubClientConfig.
+// If the client config is nil a github.Client is returned with a default http.Client type.
+func CreateGithubClient(ctx context.Context, version *versionv1alpha1.Version, githubConfig *GithubClientConfig) (*github.Client, error) {
+	if version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient && githubConfig == nil {
+		return nil, fmt.Errorf("module '%s' is marked to UseAuthenticatedClient but GithubClientConfig is nil", version.Name)
 	}
 
-	if moduleVersion.Spec.ModuleConfig.GithubClientConfig.UseAuthenticatedClient && githubConfig != nil {
+	if version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient && githubConfig != nil {
 		authClient, err := GenerateAuthenticatedGithubClient(ctx, githubConfig)
 		if err != nil {
 			return nil, fmt.Errorf("unable to generate authenticated github client: %v", err)
@@ -49,11 +53,10 @@ func CreateGithubClient(ctx context.Context, moduleVersion *versionv1alpha1.Modu
 	return github.NewClient(nil), nil
 }
 
-// GetModuleArchiveFromTag gets a module from Github based on its ref and returns a byte slice and updates the
-// ModuleVersion with the FileName and Checksum
-func GetModuleArchiveFromRef(ctx context.Context, githubClient *github.Client, moduleVersion *versionv1alpha1.ModuleVersion, format github.ArchiveFormat) (moduleBytes []byte, checksum *string, err error) {
-	al, alResp, err := githubClient.Repositories.GetArchiveLink(ctx, moduleVersion.Spec.ModuleConfig.RepoOwner, moduleVersion.Spec.Version, format, &github.RepositoryContentGetOptions{
-		Ref: moduleVersion.Spec.Version,
+// GetModuleArchiveFromRef gets a module from Github based on its ref and returns a byte slice and the file's base64 encoded SHA256 checksum.
+func GetModuleArchiveFromRef(ctx context.Context, githubClient *github.Client, version *versionv1alpha1.Version, format github.ArchiveFormat) (moduleBytes []byte, checksum *string, err error) {
+	al, alResp, err := githubClient.Repositories.GetArchiveLink(ctx, version.Spec.ModuleConfigRef.RepoOwner, *version.Spec.ModuleConfigRef.Name, format, &github.RepositoryContentGetOptions{
+		Ref: version.Spec.Version,
 	}, true)
 
 	if alResp.StatusCode != 302 {
@@ -78,7 +81,7 @@ func GetModuleArchiveFromRef(ctx context.Context, githubClient *github.Client, m
 	return
 }
 
-// GenerateGithubClient creates a GitHub client using a GitHub App for authentication.
+// GenerateGithubClient creates a GitHub client using a GitHub Application for authentication.
 func GenerateAuthenticatedGithubClient(ctx context.Context, githubClientConfig *GithubClientConfig) (*github.Client, error) {
 	// Parse the private key
 	block, _ := pem.Decode(githubClientConfig.PrivateKeyData)
@@ -124,6 +127,7 @@ func GenerateAuthenticatedGithubClient(ctx context.Context, githubClientConfig *
 	return github.NewClient(oauthClient), nil
 }
 
+// RoundTrip sets the authorization header and executes a single HTTP transaction, returning a Response for the provided Request.
 func (t *jwtTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", t.JWT))
 	return t.Transport.RoundTrip(req)

@@ -4,37 +4,37 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: modules.kerrareg.io
+  name: versions.kerrareg.io
 spec:
   group: kerrareg.io
   names:
-    kind: Module
-    listKind: ModuleList
-    plural: modules
-    singular: module
+    kind: Version
+    listKind: VersionList
+    plural: versions
+    singular: version
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: The provider of the module
-      jsonPath: .spec.moduleConfig.provider
-      name: Provider
+    - description: The type of resource. Either 'Module' or 'Provider'
+      jsonPath: .spec.type
+      name: Type
       type: string
-    - description: The source repository URL of the module
-      jsonPath: .spec.moduleConfig.repoUrl
-      name: RepoURL
+    - description: The auto generated file name for the Version
+      jsonPath: .spec.fileName
+      name: FileName
       type: string
-    - description: The configuration for module storage
-      jsonPath: .spec.moduleConfig.storageConfig
-      name: StorageConfig
-      type: string
-    - description: Whether the Module has synced successfully
+    - description: Whether the Version has synced successfully
       jsonPath: .status.synced
       name: Synced
+      type: string
+    - description: The base64 encoded SHA256 checksum of the file Version
+      jsonPath: .status.checksum
+      name: Checksum
       type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Module is the Schema for the Modules API.
+        description: Version is the Schema for the Version API.
         properties:
           apiVersion:
             description: |-
@@ -54,14 +54,21 @@ spec:
           metadata:
             type: object
           spec:
-            description: ModuleSpec defines the desired state of a Kerrareg Module.
+            description: VersionSpec defines a specific version of a Kerrareg Module
+              or Provider.
             properties:
+              fileName:
+                description: |-
+                  The name of the file with its extension.
+                  For a Module the file extension must be one of .zip or .tar.gz
+                  since terraform/tofu currently only support these two
+                  extension types.
+                type: string
               forceSync:
-                description: A flag to force a module to synchronize
+                description: A flag to force a module version to synchronize.
                 type: boolean
-              moduleConfig:
-                description: The configuration details for the module that will be
-                  used to create each ModuleVersion
+              moduleConfigRef:
+                description: The reference to the Module resource's config.
                 properties:
                   fileFormat:
                     description: |-
@@ -134,60 +141,41 @@ spec:
                 - repoUrl
                 - storageConfig
                 type: object
-              versions:
-                description: |-
-                  The version of the module. This should be a list of maps with semantic version tags. For example, 'version: v1.0.0', or 'version: 1.0.0'.
-                  The version controller will automatically trim any leading 'v' character to make them compatible
-                  with the registry protocol
-                items:
-                  description: ModuleVersion holds details about the ModuleVersion
-                    resource under management.
-                  properties:
-                    fileName:
-                      description: The randomly generated filename with its file extension.
-                      type: string
-                    name:
-                      description: The name of the module.
-                      type: string
-                    version:
-                      description: The version of the module.
-                      type: string
-                  type: object
-                type: array
+              providerConfigRef:
+                description: The reference to the Provider resource's config.
+                properties:
+                  name:
+                    description: The name of the provider.
+                    type: string
+                type: object
+              type:
+                description: The type of resource. Either 'Module' or 'Provider'
+                type: string
+              version:
+                description: The version of the Module or Provider.
+                type: string
             required:
-            - moduleConfig
-            - versions
+            - moduleConfigRef
+            - providerConfigRef
+            - type
+            - version
             type: object
           status:
-            description: ModuleStatus defines the observed state of a module.
+            description: VersionStatus defines the current status of the resource.
             properties:
-              moduleVersionRefs:
-                additionalProperties:
-                  description: ModuleVersion holds details about the ModuleVersion
-                    resource under management.
-                  properties:
-                    fileName:
-                      description: The randomly generated filename with its file extension.
-                      type: string
-                    name:
-                      description: The name of the module.
-                      type: string
-                    version:
-                      description: The version of the module.
-                      type: string
-                  type: object
-                description: A slice of the ModuleVersionRefs that have been successfully
-                  created by the controller
-                type: object
+              checksum:
+                description: The SHA256 checksum of the module as a base64 encoded
+                  string.
+                type: string
               syncStatus:
-                description: A field for declaring current status information about
-                  how the resource is being reconciled
+                description: The Version's reconciliation status.
                 type: string
               synced:
-                description: A flag to determine if the module has successfully synced
-                  to its desired state
+                description: A flag that determines whether the Version has been successfully
+                  reconciled.
                 type: boolean
             required:
+            - checksum
             - syncStatus
             - synced
             type: object

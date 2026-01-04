@@ -17,7 +17,7 @@ resources:
   controller: true
   domain: kerrareg.io
   group: kerrareg.io
-  kind: ModuleVersion
+  kind: Version
   path: kerrareg/services/version/api/v1alpha1
   version: v1alpha1
 version: "3"

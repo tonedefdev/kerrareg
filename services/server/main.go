@@ -21,6 +21,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"kerrareg/api/types"
 	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
 	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
 )
@@ -53,11 +54,11 @@ type ServiceDiscoveryResponse struct {
 }
 
 type ModuleVersionsResponse struct {
-	Modules []ModuleVersion `json:"modules"`
+	Modules []ModuleVersions `json:"modules"`
 }
 
-type ModuleVersion struct {
-	Versions []versionv1alpha1.ModuleVersionSpec `json:"versions"`
+type ModuleVersions struct {
+	Versions []types.ModuleVersion `json:"versions"`
 }
 
 func serviceDiscoveryHandler(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +69,7 @@ func serviceDiscoveryHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r *http.Request) (*versionv1alpha1.ModuleVersion, error) {
+func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r *http.Request) (*versionv1alpha1.Version, error) {
 	name := chi.URLParam(r, "name")
 	namespace := chi.URLParam(r, "namespace")
 	version := chi.URLParam(r, "version")
@@ -78,14 +79,14 @@ func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r 
 		Get().
 		AbsPath("/apis/kerrareg.io/v1alpha1").
 		Namespace(namespace).
-		Resource("moduleversions").
+		Resource("versions").
 		Name(moduleName).
 		DoRaw(r.Context())
 	if err != nil {
 		return nil, err
 	}
 
-	var moduleVersion versionv1alpha1.ModuleVersion
+	var moduleVersion versionv1alpha1.Version
 	if err = json.Unmarshal(result, &moduleVersion); err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return nil, err
@@ -114,14 +115,14 @@ func getDownloadModuleUrl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	checksumQuery := url.QueryEscape(*moduleVersion.Spec.Checksum)
+	checksumQuery := url.QueryEscape(*moduleVersion.Status.Checksum)
 
 	var downloadPath string
-	if moduleVersion.Spec.ModuleConfig.StorageConfig.S3 != nil {
+	if moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3 != nil {
 		downloadPath = fmt.Sprintf("s3/%s/%s/%s?fileChecksum=%s",
-			moduleVersion.Spec.ModuleConfig.StorageConfig.S3.Bucket,
-			moduleVersion.Spec.ModuleConfig.StorageConfig.S3.Region,
-			moduleVersion.Spec.ModuleConfig.StorageConfig.S3.Key,
+			moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Bucket,
+			moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Region,
+			*moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Key,
 			checksumQuery,
 		)
 	}
@@ -267,7 +268,7 @@ func getModuleVersions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := ModuleVersionsResponse{
-		Modules: []ModuleVersion{
+		Modules: []ModuleVersions{
 			{
 				Versions: module.Spec.Versions,
 			},

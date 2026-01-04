@@ -40,13 +40,13 @@ var _ = Describe("Module Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		kerrareg := &versionv1alpha1.ModuleVersion{}
+		kerrareg := &versionv1alpha1.Version{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind Module")
 			err := k8sClient.Get(ctx, typeNamespacedName, kerrareg)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &versionv1alpha1.ModuleVersion{
+				resource := &versionv1alpha1.Version{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,7 +59,7 @@ var _ = Describe("Module Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &versionv1alpha1.ModuleVersion{}
+			resource := &versionv1alpha1.Version{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
