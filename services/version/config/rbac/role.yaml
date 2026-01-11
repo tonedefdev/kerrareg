@@ -13,6 +13,21 @@ rules:
 - apiGroups:
   - kerrareg.io
   resources:
+  - modules
+  verbs:
+  - get
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - modules/status
+  - versions/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - kerrareg.io
+  resources:
   - versions
   verbs:
   - create
@@ -27,12 +42,4 @@ rules:
   resources:
   - versions/finalizers
   verbs:
-  - update
-- apiGroups:
-  - kerrareg.io
-  resources:
-  - versions/status
-  verbs:
-  - get
-  - patch
   - update

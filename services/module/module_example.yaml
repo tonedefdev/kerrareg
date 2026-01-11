@@ -1,7 +1,7 @@
 apiVersion: kerrareg.io/v1alpha1
 kind: Module
 metadata:
-  name: terraform-azurerm-aks
+  name: terraform-aws-eks
   namespace: defdevio
 spec:
   moduleConfig:
@@ -9,14 +9,11 @@ spec:
     githubClientConfig:
       useAuthenticatedClient: true
     immutable: true
-    provider: azurerm
-    repoOwner: defdevio
-    repoUrl: https://github.com/defdevio/terraform-azurerm-aks
+    provider: aws
+    repoOwner: terraform-aws-modules
+    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-eks
     storageConfig:
-      s3:
-        bucket: kerrareg-module-store
-        region: us-west-2
+      fileSystem:
+        directoryPath: /Users/tonedefdev/Desktop/modules/
   versions:
-  - version: v0.0.2
-  - version: v0.0.1
-  - version: v0.0.3
+  - version: v21.12.0

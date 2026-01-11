@@ -59,6 +59,10 @@ func GetModuleArchiveFromRef(ctx context.Context, githubClient *github.Client, v
 		Ref: version.Spec.Version,
 	}, true)
 
+	if al == nil || alResp == nil {
+		return nil, nil, fmt.Errorf("the response from the Github API was nil: %w", err)
+	}
+
 	if alResp.StatusCode != 302 {
 		return nil, nil, fmt.Errorf("failed to get Github archive link: status code %d: %w", alResp.StatusCode, err)
 	}

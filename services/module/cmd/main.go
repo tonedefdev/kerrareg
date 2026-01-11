@@ -40,6 +40,7 @@ import (
 
 	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
 	"kerrareg/services/module/internal/controller"
+	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -51,6 +52,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(modulev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(versionv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -66,7 +68,7 @@ func main() {
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
-	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8083", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")

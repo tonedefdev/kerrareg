@@ -25,6 +25,7 @@ import (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="LatestVersion",type="string",JSONPath=".status.latestVersion",description="The latest version of the module"
 // +kubebuilder:printcolumn:name="Provider",type="string",JSONPath=".spec.moduleConfig.provider",description="The provider of the module"
 // +kubebuilder:printcolumn:name="RepoURL",type="string",JSONPath=".spec.moduleConfig.repoUrl",description="The source repository URL of the module"
 // +kubebuilder:printcolumn:name="StorageConfig",type="string",JSONPath=".spec.moduleConfig.storageConfig",description="The configuration for module storage"
@@ -53,12 +54,16 @@ type ModuleSpec struct {
 
 // ModuleStatus defines the observed state of a module.
 type ModuleStatus struct {
+	// The latest available version of the module
+	LatestVersion *string `json:"latestVersion,omitempty"`
+	// The randomly generated filename with its file extension.
+	FileName string `json:"fileName,omitempty"`
 	// A flag to determine if the module has successfully synced to its desired state
 	Synced bool `json:"synced"`
 	// A field for declaring current status information about how the resource is being reconciled
 	SyncStatus string `json:"syncStatus"`
 	// A slice of the ModuleVersionRefs that have been successfully created by the controller
-	ModuleVersionRefs map[string]types.ModuleVersion `json:"moduleVersionRefs,omitempty"`
+	ModuleVersionRefs map[string]*types.ModuleVersion `json:"moduleVersionRefs,omitempty"`
 }
 
 // +kubebuilder:object:root=true

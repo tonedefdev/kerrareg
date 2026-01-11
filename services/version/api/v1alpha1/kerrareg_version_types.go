@@ -48,11 +48,11 @@ type VersionSpec struct {
 	// A flag to force a module version to synchronize.
 	ForceSync bool `json:"forceSync,omitempty"`
 	// The reference to the Module resource's config.
-	ModuleConfigRef types.ModuleConfig `json:"moduleConfigRef"`
+	ModuleConfigRef types.ModuleConfig `json:"moduleConfigRef,omitempty"`
 	// The reference to the Provider resource's config.
-	ProviderConfigRef types.ProviderConfig `json:"providerConfigRef"`
+	ProviderConfigRef types.ProviderConfig `json:"providerConfigRef,omitempty"`
 	// The type of resource. Either 'Module' or 'Provider'
-	Type string `json:"type"`
+	Type types.KerraregType `json:"type"`
 	// The version of the Module or Provider.
 	Version string `json:"version"`
 }
