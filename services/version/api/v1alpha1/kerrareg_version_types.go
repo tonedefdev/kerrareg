@@ -52,7 +52,7 @@ type VersionSpec struct {
 	// The reference to the Provider resource's config.
 	ProviderConfigRef types.ProviderConfig `json:"providerConfigRef,omitempty"`
 	// The type of resource. Either 'Module' or 'Provider'
-	Type types.KerraregType `json:"type"`
+	Type string `json:"type"`
 	// The version of the Module or Provider.
 	Version string `json:"version"`
 }

@@ -382,6 +382,7 @@ func (r *KerraregReconciler) versionForModule(module *modulev1alpha1.Module, mod
 		},
 		Spec: versionv1alpha1.VersionSpec{
 			Version: version.Version,
+			Type:    types.KerraregModule,
 		},
 	}
 

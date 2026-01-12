@@ -10,12 +10,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/google/go-github/v50/github"
 	"golang.org/x/oauth2"
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	kerraregTypes "kerrareg/api/types"
 	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
 )
 
@@ -37,12 +41,12 @@ type GithubClientConfig struct {
 
 // CreateGithubClient creates an authenticated client with the provided GithubClientConfig.
 // If the client config is nil a github.Client is returned with a default http.Client type.
-func CreateGithubClient(ctx context.Context, version *versionv1alpha1.Version, githubConfig *GithubClientConfig) (*github.Client, error) {
-	if version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient && githubConfig == nil {
-		return nil, fmt.Errorf("module '%s' is marked to UseAuthenticatedClient but GithubClientConfig is nil", version.Name)
+func CreateGithubClient(ctx context.Context, useAuthenticatedClient bool, githubConfig *GithubClientConfig) (*github.Client, error) {
+	if useAuthenticatedClient && githubConfig == nil {
+		return nil, fmt.Errorf("resource is marked to UseAuthenticatedClient but GithubClientConfig is nil")
 	}
 
-	if version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient && githubConfig != nil {
+	if useAuthenticatedClient && githubConfig != nil {
 		authClient, err := GenerateAuthenticatedGithubClient(ctx, githubConfig)
 		if err != nil {
 			return nil, fmt.Errorf("unable to generate authenticated github client: %v", err)
@@ -129,6 +133,44 @@ func GenerateAuthenticatedGithubClient(ctx context.Context, githubClientConfig *
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: instToken.GetToken()})
 	oauthClient := oauth2.NewClient(ctx, ts)
 	return github.NewClient(oauthClient), nil
+}
+
+// GetGithubApplicationSecret retrieves the kerrareg-github-application-secret kubernetes secret from the cluster
+// using the client received by k8sClient. It returns a GithubClientConfig for making authenticated requests to the Github API.
+// The k8sClient parameter should be received by the controller's client.
+func GetGithubApplicationSecret(ctx context.Context, k8sClient client.Client, secretNamespace string) (*GithubClientConfig, error) {
+	object := client.ObjectKey{
+		Name:      kerraregTypes.KerraregGithubSecretName,
+		Namespace: secretNamespace,
+	}
+
+	secret := corev1.Secret{}
+	if err := k8sClient.Get(ctx, object, &secret); err != nil {
+		return nil, err
+	}
+
+	appID, err := strconv.ParseInt(string(secret.Data[kerraregTypes.KerraregGithubSecretDataFieldAppID]), 0, 64)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse '%s' as int64: %w", kerraregTypes.KerraregGithubSecretDataFieldAppID, err)
+	}
+
+	installID, err := strconv.ParseInt(string(secret.Data[kerraregTypes.KerraregGithubSecretDataFieldInstallID]), 0, 64)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse '%s' as int64: %w", kerraregTypes.KerraregGithubSecretDataFieldInstallID, err)
+	}
+
+	keyData, err := base64.StdEncoding.DecodeString(string(secret.Data[kerraregTypes.KerraregGithubSecretDataFieldPrivateKey]))
+	if err != nil {
+		return nil, fmt.Errorf("unable to decode '%s': %w", kerraregTypes.KerraregGithubSecretDataFieldPrivateKey, err)
+	}
+
+	githubClientConfig := &GithubClientConfig{
+		AppID:          appID,
+		InstallationID: installID,
+		PrivateKeyData: keyData,
+	}
+
+	return githubClientConfig, nil
 }
 
 // RoundTrip sets the authorization header and executes a single HTTP transaction, returning a Response for the provided Request.

@@ -1,10 +1,11 @@
-module kerrareg/services/version
+module kerrareg/services/depot
 
 go 1.25.0
 
 require (
 	github.com/go-logr/logr v1.4.3
 	github.com/google/go-github/v50 v50.2.0
+	github.com/hashicorp/go-version v1.8.0
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	k8s.io/apimachinery v0.35.0

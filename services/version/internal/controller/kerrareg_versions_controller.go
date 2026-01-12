@@ -18,15 +18,12 @@ package controller
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/google/go-github/v50/github"
-	corev1 "k8s.io/api/core/v1"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
@@ -37,20 +34,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kerraregTypes "kerrareg/api/types"
+	kerraregGithub "kerrareg/pkg/github"
+	"kerrareg/pkg/storage"
+	"kerrareg/pkg/storage/types"
 	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
 	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
-	kerraregGithub "kerrareg/services/version/internal/github"
-	"kerrareg/services/version/internal/storage"
-	"kerrareg/services/version/internal/storage/types"
 )
 
 const (
-	kerraregControllerName                  = "kerrareg-versions-controller"
-	kerraregFinalizer                       = "kerrareg.io/finalizer"
-	kerraregGithubSecretName                = "kerrareg-github-application-secret"
-	kerraregGithubSecretDataFieldAppID      = "githubAppID"
-	kerraregGithubSecretDataFieldInstallID  = "githubInstallID"
-	kerraregGithubSecretDataFieldPrivateKey = "githubPrivateKey"
+	kerraregControllerName = "kerrareg-versions-controller"
 )
 
 var (
@@ -93,13 +85,13 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	)
 
 	if version.ObjectMeta.DeletionTimestamp.IsZero() {
-		if !controllerutil.ContainsFinalizer(version, kerraregFinalizer) {
+		if !controllerutil.ContainsFinalizer(version, kerraregTypes.KerraregFinalizer) {
 			r.Log.V(5).Info("Adding finalizer",
 				"version", version.Spec.Version,
 				"versionName", version.Name,
 			)
 
-			updated := controllerutil.AddFinalizer(version, kerraregFinalizer)
+			updated := controllerutil.AddFinalizer(version, kerraregTypes.KerraregFinalizer)
 			if !updated {
 				return ctrl.Result{}, err
 			}
@@ -132,7 +124,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	} else {
 		// The object is being deleted
-		if controllerutil.ContainsFinalizer(version, kerraregFinalizer) {
+		if controllerutil.ContainsFinalizer(version, kerraregTypes.KerraregFinalizer) {
 			filePath, err := getModuleFilePath(version)
 			if err != nil {
 				return ctrl.Result{}, err
@@ -148,7 +140,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				return ctrl.Result{}, err
 			}
 
-			controllerutil.RemoveFinalizer(version, kerraregFinalizer)
+			controllerutil.RemoveFinalizer(version, kerraregTypes.KerraregFinalizer)
 
 			if err := r.Update(ctx, version); err != nil {
 				return ctrl.Result{}, err
@@ -160,7 +152,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	versionType := version.Spec.Type
 	moduleObject := client.ObjectKey{
-		Name:      version.ObjectMeta.Labels[fmt.Sprintf("kerrareg.io/%s", strings.ToLower(versionType.String()))],
+		Name:      version.ObjectMeta.Labels[fmt.Sprintf("kerrareg.io/%s", strings.ToLower(versionType))],
 		Namespace: version.ObjectMeta.Labels["kerrareg.io/namespace"],
 	}
 
@@ -170,7 +162,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	switch version.Spec.Type {
-	case kerraregTypes.Module:
+	case kerraregTypes.KerraregModule:
 		{
 			version.Spec.ModuleConfigRef = module.Spec.ModuleConfig
 			version.Spec.FileName = &module.Status.ModuleVersionRefs[version.Spec.Version].FileName
@@ -201,7 +193,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if version.Spec.ModuleConfigRef.Name != nil {
 		var githubClient *github.Client
 		if version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient {
-			githubClientConfig, err := r.GetGithubApplicationSecret(ctx, version)
+			githubClientConfig, err := kerraregGithub.GetGithubApplicationSecret(ctx, r.Client, version.Namespace)
 			if err != nil {
 				r.Log.Error(err, "Unable to retrieve Github Application secret",
 					"version", version.Spec.Version,
@@ -210,7 +202,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				return requeueForDuration(30, err)
 			}
 
-			authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, version, githubClientConfig)
+			authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient, githubClientConfig)
 			if err != nil {
 				r.Log.Error(err, "Unable to create authenticated Github client",
 					"version", version.Spec.Version,
@@ -412,7 +404,8 @@ func (r *KerraregReconciler) ProcessUpdate(ctx context.Context, version *version
 	return nil
 }
 
-// RunStorageFactory is the runtime handler for storing new objects received by soi.
+// RunStorageFactory is the runtime handler for managing storage objects received by 'soi'. It uses the concrete implementation
+// of the storage.Storage interface to interact with the underlying storage system.
 func RunStorageFactory(ctx context.Context, storageInterface storage.Storage, soi *types.StorageObjectInput) error {
 	switch soi.Method {
 	case types.Delete:
@@ -436,7 +429,7 @@ func RunStorageFactory(ctx context.Context, storageInterface storage.Storage, so
 	return nil
 }
 
-// InitStorageFactory prepares the storage factory runtime by providing a concrete implementation of the storage.Storage interface
+// InitStorageFactory prepares and inits the storage factory runtime by providing a concrete implementation of the storage.Storage interface.
 func (r *KerraregReconciler) InitStorageFactory(ctx context.Context, soi *types.StorageObjectInput) error {
 	var storageInterface storage.Storage
 	if soi.Version.Spec.ModuleConfigRef.StorageConfig.FileSystem != nil {
@@ -465,43 +458,6 @@ func (r *KerraregReconciler) InitStorageFactory(ctx context.Context, soi *types.
 	}
 
 	return fmt.Errorf("At least one StorageConfig must be configured on the Module.")
-}
-
-// GetGithubApplicationSecret retrieves the kerrareg-github-application-secret kubernetes secret from the cluster
-// and returns a GithubClientConfig for making authenticated requests to the Github API.
-func (r *KerraregReconciler) GetGithubApplicationSecret(ctx context.Context, version *versionv1alpha1.Version) (*kerraregGithub.GithubClientConfig, error) {
-	object := client.ObjectKey{
-		Name:      kerraregGithubSecretName,
-		Namespace: version.Namespace,
-	}
-
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, object, secret); err != nil {
-		return nil, err
-	}
-
-	appID, err := strconv.ParseInt(string(secret.Data[kerraregGithubSecretDataFieldAppID]), 0, 64)
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse '%s' as int64: %w", kerraregGithubSecretDataFieldAppID, err)
-	}
-
-	installID, err := strconv.ParseInt(string(secret.Data[kerraregGithubSecretDataFieldInstallID]), 0, 64)
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse '%s' as int64: %w", kerraregGithubSecretDataFieldInstallID, err)
-	}
-
-	keyData, err := base64.StdEncoding.DecodeString(string(secret.Data[kerraregGithubSecretDataFieldPrivateKey]))
-	if err != nil {
-		return nil, fmt.Errorf("unable to decode '%s': %w", kerraregGithubSecretDataFieldPrivateKey, err)
-	}
-
-	githubClientConfig := &kerraregGithub.GithubClientConfig{
-		AppID:          appID,
-		InstallationID: installID,
-		PrivateKeyData: keyData,
-	}
-
-	return githubClientConfig, nil
 }
 
 // getModuleFilePath gets the Version's file path as either the user defined storage path

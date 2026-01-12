@@ -117,8 +117,8 @@ spec:
                           on a local filesystem.
                         properties:
                           directoryPath:
-                            description: The path on the file system where the Version
-                              will be stored.
+                            description: The directory path on the file system where
+                              the Version will be stored.
                             type: string
                         type: object
                       s3:
@@ -151,7 +151,7 @@ spec:
                 type: object
               type:
                 description: The type of resource. Either 'Module' or 'Provider'
-                type: integer
+                type: string
               version:
                 description: The version of the Module or Provider.
                 type: string

@@ -8,7 +8,7 @@ import (
 	"os"
 	"path"
 
-	"kerrareg/services/version/internal/storage/types"
+	"kerrareg/pkg/storage/types"
 )
 
 type FileSystem struct{}

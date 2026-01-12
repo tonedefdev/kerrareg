@@ -2,7 +2,7 @@ package storage
 
 import (
 	"context"
-	storagetypes "kerrareg/services/version/internal/storage/types"
+	storagetypes "kerrareg/pkg/storage/types"
 )
 
 type GoogleCloudStorage struct {

@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
+	storagetypes "kerrareg/pkg/storage/types"
 	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
-	storagetypes "kerrareg/services/version/internal/storage/types"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"

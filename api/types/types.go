@@ -8,6 +8,16 @@ const (
 	Provider
 )
 
+const (
+	KerraregFinalizer                       = "kerrareg.io/finalizer"
+	KerraregGithubSecretDataFieldAppID      = "githubAppID"
+	KerraregGithubSecretDataFieldInstallID  = "githubInstallID"
+	KerraregGithubSecretDataFieldPrivateKey = "githubPrivateKey"
+	KerraregGithubSecretName                = "kerrareg-github-application-secret"
+	KerraregModule                          = "Module"
+	KerraregProvider                        = "Provider"
+)
+
 // The configuration settings for storing the module in an Amazon S3 bucket.
 type AmazonS3Config struct {
 	// The S3 bucket name.
@@ -52,6 +62,10 @@ type ModuleConfig struct {
 	RepoUrl string `json:"repoUrl,omitempty"`
 	// The external storage configuration settings.
 	StorageConfig StorageConfig `json:"storageConfig,omitempty"`
+	// A comma separated list of version constraints such as
+	// '1.2.1' or '>= 1.0.0, < 2.0.0' or '~> 1.0.0, != 1.0.2'. This field is only
+	// respected by the Depot controller.
+	VersionConstraints string `json:"versionConstraints,omitempty"`
 }
 
 // ModuleVersion holds details about the Version resource under management.

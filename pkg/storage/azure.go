@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
-	storagetypes "kerrareg/services/version/internal/storage/types"
+	storagetypes "kerrareg/pkg/storage/types"
 	"net/http"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
