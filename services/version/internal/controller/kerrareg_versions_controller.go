@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/google/go-github/v50/github"
+	"github.com/google/go-github/v81/github"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
@@ -84,6 +84,16 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		"versionName", version.Name,
 	)
 
+	moduleObject := client.ObjectKey{
+		Name:      *version.Spec.ModuleConfigRef.Name,
+		Namespace: req.Namespace,
+	}
+
+	var module modulev1alpha1.Module
+	if err = r.Get(ctx, moduleObject, &module); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if version.ObjectMeta.DeletionTimestamp.IsZero() {
 		if !controllerutil.ContainsFinalizer(version, kerraregTypes.KerraregFinalizer) {
 			r.Log.V(5).Info("Adding finalizer",
@@ -124,12 +134,14 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	} else {
 		// The object is being deleted
+		r.Log.V(5).Info("Object is being deleted", "version", version.Spec)
 		if controllerutil.ContainsFinalizer(version, kerraregTypes.KerraregFinalizer) {
 			filePath, err := getModuleFilePath(version)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 
+			version.Spec.ModuleConfigRef = module.Spec.ModuleConfig
 			soi := &types.StorageObjectInput{
 				Method:   types.Delete,
 				FilePath: filePath,
@@ -141,7 +153,6 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			}
 
 			controllerutil.RemoveFinalizer(version, kerraregTypes.KerraregFinalizer)
-
 			if err := r.Update(ctx, version); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -150,22 +161,15 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	versionType := version.Spec.Type
-	moduleObject := client.ObjectKey{
-		Name:      version.ObjectMeta.Labels[fmt.Sprintf("kerrareg.io/%s", strings.ToLower(versionType))],
-		Namespace: version.ObjectMeta.Labels["kerrareg.io/namespace"],
-	}
-
-	var module modulev1alpha1.Module
-	if err = r.Get(ctx, moduleObject, &module); err != nil {
-		return ctrl.Result{}, err
+	if module.Status.ModuleVersionRefs[version.Spec.Version].FileName == nil {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	switch version.Spec.Type {
 	case kerraregTypes.KerraregModule:
 		{
 			version.Spec.ModuleConfigRef = module.Spec.ModuleConfig
-			version.Spec.FileName = &module.Status.ModuleVersionRefs[version.Spec.Version].FileName
+			version.Spec.FileName = module.Status.ModuleVersionRefs[version.Spec.Version].FileName
 
 			if module.Spec.ModuleConfig.Name == nil {
 				version.Spec.ModuleConfigRef.Name = &module.ObjectMeta.Name
@@ -187,113 +191,119 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		version.Status.Synced = false
 		version.Status.SyncStatus = "Only one of 'ModuleConfigRef' or 'ProviderConfigRef' can be provided: Both are defined"
 		err = r.Status().Update(ctx, version)
-		return requeueForDuration(30, err)
+		return ctrl.Result{}, err
 	}
 
+	var githubClientConfig *kerraregGithub.GithubClientConfig
 	if version.Spec.ModuleConfigRef.Name != nil {
 		var githubClient *github.Client
 		if version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient {
-			githubClientConfig, err := kerraregGithub.GetGithubApplicationSecret(ctx, r.Client, version.Namespace)
+			githubClientConfig, err = kerraregGithub.GetGithubApplicationSecret(ctx, r.Client, version.Namespace)
 			if err != nil {
 				r.Log.Error(err, "Unable to retrieve Github Application secret",
 					"version", version.Spec.Version,
 					"versionName", version.Name,
 				)
-				return requeueForDuration(30, err)
-			}
-
-			authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient, githubClientConfig)
-			if err != nil {
-				r.Log.Error(err, "Unable to create authenticated Github client",
-					"version", version.Spec.Version,
-					"versionName", version.Name,
-				)
-				return requeueForDuration(30, err)
-			}
-
-			githubClient = authGithubClient
-			r.Log.V(5).Info("Created authenticated Github client",
-				"version", version.Spec.Version,
-				"versionName", version.Name,
-			)
-
-			var fileFormat github.ArchiveFormat
-			if strings.Contains(*version.Spec.FileName, "zip") {
-				fileFormat = github.Zipball
-			} else {
-				fileFormat = github.Tarball
-			}
-
-			moduleBytes, checksum, err := kerraregGithub.GetModuleArchiveFromRef(ctx, githubClient, version, fileFormat)
-			if err != nil {
-				version.Status.SyncStatus = fmt.Sprintf("Failed to retrieve Github archive: %v", err)
-				err = r.Status().Update(ctx, version)
-				return requeueForDuration(30, err)
-			}
-
-			fileBytes = moduleBytes
-			archiveChecksum = checksum
-
-			r.Log.V(5).Info("Successfully retrieved file archive from Github",
-				"version", version.Spec.Version,
-				"versionName", version.Name,
-			)
-
-			// If Module is immutable, the checksum field is non-nil, and the calculated checksum between
-			// the Github archive and the version stored in the resource's status do not match - stop processing, update status, and requeue.
-			if version.Spec.ModuleConfigRef.Immutable && version.Status.Checksum != nil && *version.Status.Checksum != *archiveChecksum {
-				statusMsg := fmt.Errorf("Version is marked immutable: archive checksum doesn't match spec: got '%s'", *archiveChecksum)
-				r.Log.Error(statusMsg, "checksum mismatch", "versionName", version.Name, "version", version.Spec.Version)
-
-				version.Status.SyncStatus = statusMsg.Error()
-				version.Status.Synced = false
-				err = r.Status().Update(ctx, version)
-				return requeueForDuration(30, err)
-			}
-
-			filePath, err = getModuleFilePath(version)
-			if err != nil {
-				return requeueForDuration(30, err)
-			}
-		}
-		soi := &types.StorageObjectInput{
-			FileBytes: fileBytes,
-			FilePath:  filePath,
-			Version:   version,
-		}
-
-		if version.Status.Checksum != nil {
-			// Get the checksum of the object from the storage system
-			// and set its value in soi receiver's ObjectChecksum field
-			soi.Method = types.Get
-			_ = r.InitStorageFactory(ctx, soi)
-		} else {
-			soi.Method = types.Put
-			r.Log.V(5).Info("No checksum status: reconciling object",
-				"version", version.Spec.Version,
-				"versionName", version.Name,
-			)
-			if err = r.InitStorageFactory(ctx, soi); err != nil {
-				return requeueForDuration(30, err)
+				return ctrl.Result{}, err
 			}
 		}
 
-		if soi.FileNotExists || soi.ObjectChecksum != nil && version.Status.Checksum != nil && *soi.ObjectChecksum != *version.Status.Checksum {
-			soi.Method = types.Put
-			r.Log.V(5).Info("File is missing or checksum mismatch: reconciling object",
+		authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient, githubClientConfig)
+		if err != nil {
+			r.Log.Error(err, "Unable to create authenticated Github client",
 				"version", version.Spec.Version,
 				"versionName", version.Name,
 			)
-			if err = r.InitStorageFactory(ctx, soi); err != nil {
-				return requeueForDuration(30, err)
-			}
+			return ctrl.Result{}, err
 		}
 
-		r.Log.V(5).Info("File exists and checksums match: finished reconciling",
+		githubClient = authGithubClient
+		r.Log.V(5).Info("Created authenticated Github client",
 			"version", version.Spec.Version,
 			"versionName", version.Name,
 		)
+
+		var fileFormat github.ArchiveFormat
+		if strings.Contains(*version.Spec.FileName, "zip") {
+			fileFormat = github.Zipball
+		} else {
+			fileFormat = github.Tarball
+		}
+
+		moduleBytes, checksum, err := kerraregGithub.GetModuleArchiveFromRef(ctx, githubClient, version, fileFormat)
+		if err != nil {
+			version.Status.SyncStatus = fmt.Sprintf("Failed to retrieve Github archive: %v", err)
+			err = r.Status().Update(ctx, version)
+			return ctrl.Result{}, err
+		}
+
+		fileBytes = moduleBytes
+		archiveChecksum = checksum
+
+		r.Log.V(5).Info("Successfully retrieved file archive from Github",
+			"version", version.Spec.Version,
+			"versionName", version.Name,
+		)
+
+		// If Module is immutable, the checksum field is non-nil, and the calculated checksum between
+		// the Github archive and the version stored in the resource's status do not match - stop processing, update status, and requeue.
+		if version.Spec.ModuleConfigRef.Immutable && version.Status.Checksum != nil && *version.Status.Checksum != *archiveChecksum {
+			statusMsg := fmt.Errorf("Version is marked immutable: archive checksum doesn't match spec: got '%s'", *archiveChecksum)
+			r.Log.Error(statusMsg, "checksum mismatch", "versionName", version.Name, "version", version.Spec.Version)
+
+			version.Status.SyncStatus = statusMsg.Error()
+			version.Status.Synced = false
+			err = r.Status().Update(ctx, version)
+			return ctrl.Result{}, err
+		}
+
+		filePath, err = getModuleFilePath(version)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 	}
+
+	if filePath == nil {
+		return ctrl.Result{}, fmt.Errorf("the filePath was nil")
+	}
+
+	soi := &types.StorageObjectInput{
+		FileBytes: fileBytes,
+		FilePath:  filePath,
+		Version:   version,
+	}
+
+	if version.Status.Checksum != nil {
+		// Get the checksum of the object from the storage system
+		// and set its value in soi receiver's ObjectChecksum field
+		soi.Method = types.Get
+		_ = r.InitStorageFactory(ctx, soi)
+	} else {
+		soi.Method = types.Put
+		r.Log.V(5).Info("No checksum status: reconciling object",
+			"version", version.Spec.Version,
+			"versionName", version.Name,
+		)
+		if err = r.InitStorageFactory(ctx, soi); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	if !soi.FileExists || soi.ObjectChecksum != nil && version.Status.Checksum != nil && *soi.ObjectChecksum != *version.Status.Checksum {
+		soi.Method = types.Put
+		r.Log.V(5).Info("File is missing or checksum mismatch: reconciling object",
+			"version", version.Spec.Version,
+			"versionName", version.Name,
+		)
+		if err = r.InitStorageFactory(ctx, soi); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	r.Log.V(5).Info("File exists and checksums match: finished reconciling",
+		"version", version.Spec.Version,
+		"versionName", version.Name,
+	)
 
 	var currentVersion versionv1alpha1.Version
 	if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -340,17 +350,15 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		r.Log.Error(err, "Failed to update Version status",
 			"version", version.Name,
 		)
-		return ctrl.Result{
-			RequeueAfter: time.Duration(30 * time.Second),
-		}, err
+		return ctrl.Result{}, err
 	}
 
-	r.Log.V(5).Info("Successfully reconciled Version",
+	r.Log.Info("Successfully reconciled Version",
 		"version", version.Name,
 		"namespace", version.Namespace,
 	)
 
-	return reconcile.Result{}, err
+	return reconcile.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -359,49 +367,9 @@ func (r *KerraregReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&versionv1alpha1.Version{}).
 		Named(kerraregControllerName).
 		WithOptions(controller.Options{
-			MaxConcurrentReconciles: 4,
+			MaxConcurrentReconciles: 1,
 		}).
 		Complete(r)
-}
-
-// NewS3Client creates a new S3 client based on the configuration received by version.
-func (r *KerraregReconciler) NewS3Client(ctx context.Context, version *versionv1alpha1.Version, amazonS3Storage *storage.AmazonS3Storage) error {
-	err := amazonS3Storage.NewClient(ctx, version)
-	if err != nil {
-		r.Log.Error(err, "Unable to create S3 client",
-			"version", version.Spec.Version,
-			"versionName", version.Name,
-		)
-
-		return err
-	}
-
-	return nil
-}
-
-// ProcessUpdate processes an update on the Version received by version. The object must be a pointer to a struct of type Version.
-func (r *KerraregReconciler) ProcessUpdate(ctx context.Context, version *versionv1alpha1.Version) error {
-	// If we have forced synced and reached here then to set this back to
-	// false.
-	if version.Spec.ForceSync {
-		version.Spec.ForceSync = false
-	}
-
-	err := r.Update(ctx, version, &client.SubResourceUpdateOptions{
-		UpdateOptions: client.UpdateOptions{
-			FieldManager: kerraregControllerName,
-		},
-	})
-	if err != nil {
-		r.Log.Error(err, "Unable to update Version resource",
-			"module", version.Spec.ModuleConfigRef.Name,
-			"version", version.Spec.Version,
-			"versionName", version.Name,
-		)
-		return err
-	}
-
-	return nil
 }
 
 // RunStorageFactory is the runtime handler for managing storage objects received by 'soi'. It uses the concrete implementation
@@ -443,7 +411,7 @@ func (r *KerraregReconciler) InitStorageFactory(ctx context.Context, soi *types.
 
 	if soi.Version.Spec.ModuleConfigRef.StorageConfig.S3 != nil {
 		amazonS3Storage := &storage.AmazonS3Storage{}
-		err := r.NewS3Client(ctx, soi.Version, amazonS3Storage)
+		err := amazonS3Storage.NewClient(ctx, soi.Version.Spec.ModuleConfigRef.StorageConfig.S3.Region)
 		if err != nil {
 			return err
 		}
@@ -487,12 +455,4 @@ func getModuleFilePath(version *versionv1alpha1.Version) (*string, error) {
 
 	filePath = fmt.Sprintf("%s/%s", *version.Spec.ModuleConfigRef.Name, *version.Spec.FileName)
 	return &filePath, nil
-}
-
-// requeueForDuration is a helper function to return any error received by err, and a reconcile.Result configured to RequeueAfter
-// the time.Duration received by duration.
-func requeueForDuration(duration time.Duration, err error) (reconcile.Result, error) {
-	return reconcile.Result{
-		RequeueAfter: time.Duration(duration * time.Second),
-	}, err
 }

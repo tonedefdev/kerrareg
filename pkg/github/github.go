@@ -11,10 +11,11 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
-	"github.com/google/go-github/v50/github"
+	"github.com/google/go-github/v81/github"
 	"golang.org/x/oauth2"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -59,9 +60,19 @@ func CreateGithubClient(ctx context.Context, useAuthenticatedClient bool, github
 
 // GetModuleArchiveFromRef gets a module from Github based on its ref and returns a byte slice and the file's base64 encoded SHA256 checksum.
 func GetModuleArchiveFromRef(ctx context.Context, githubClient *github.Client, version *versionv1alpha1.Version, format github.ArchiveFormat) (moduleBytes []byte, checksum *string, err error) {
+	ref := version.Spec.Version
+	if !strings.HasPrefix(ref, "v") {
+		ref = "v" + ref
+	}
+
 	al, alResp, err := githubClient.Repositories.GetArchiveLink(ctx, version.Spec.ModuleConfigRef.RepoOwner, *version.Spec.ModuleConfigRef.Name, format, &github.RepositoryContentGetOptions{
-		Ref: version.Spec.Version,
-	}, true)
+		Ref: ref,
+	}, 10)
+	defer alResp.Body.Close()
+
+	if err != nil {
+		return nil, nil, err
+	}
 
 	if al == nil || alResp == nil {
 		return nil, nil, fmt.Errorf("the response from the Github API was nil: %w", err)

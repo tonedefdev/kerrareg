@@ -5,7 +5,7 @@ metadata:
   namespace: defdevio
 spec:
   moduleConfigs:
-  - name: 
+  - name: terraform-aws-eks
     fileFormat: zip
     githubClientConfig:
       useAuthenticatedClient: true
@@ -16,4 +16,4 @@ spec:
     storageConfig:
       fileSystem:
         directoryPath: /Users/tonedefdev/Desktop/modules/
-    versionConstraints: ~> v21.0
+    versionConstraints: ">= 21.10.1"

@@ -5,9 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	storagetypes "kerrareg/pkg/storage/types"
-	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -19,14 +19,35 @@ type AmazonS3Storage struct {
 }
 
 // NewClient initializes a new AWS S3 storage client.
-func (storage *AmazonS3Storage) NewClient(ctx context.Context, version *versionv1alpha1.Version) error {
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(version.Spec.ModuleConfigRef.StorageConfig.S3.Region))
+func (storage *AmazonS3Storage) NewClient(ctx context.Context, region string) error {
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return fmt.Errorf("unable to load SDK config: %w", err)
 	}
 
 	storage.client = s3.NewFromConfig(cfg)
 	return nil
+}
+
+// GetObject retrieves the object from S3 and returns an io.Reader to stream the file from the server
+func (storage *AmazonS3Storage) GetObject(ctx context.Context, soi *storagetypes.StorageObjectInput) (io.Reader, error) {
+	resp, err := storage.client.GetObject(ctx, &s3.GetObjectInput{
+		ChecksumMode: types.ChecksumModeEnabled,
+		Bucket:       &soi.Version.Spec.ModuleConfigRef.StorageConfig.S3.Bucket,
+		Key:          soi.FilePath,
+	})
+
+	if err != nil {
+		var noSuchKey *types.NoSuchKey
+
+		if errors.As(err, &noSuchKey) {
+			return nil, err
+		}
+
+		return nil, err
+	}
+
+	return resp.Body, nil
 }
 
 // GetObjectChecksum retrieves the sha256 checksum directly from the object in the bucket and sets it on the soi receiver's field 'ObjectChecksum'.
@@ -41,16 +62,17 @@ func (storage *AmazonS3Storage) GetObjectChecksum(ctx context.Context, soi *stor
 		var noSuchKey *types.NoSuchKey
 
 		if errors.As(err, &noSuchKey) {
-			soi.FileNotExists = true
 			return err
 		}
 
-		soi.FileNotExists = true
 		return err
 	}
 
+	defer resp.Body.Close()
+
 	if resp.ChecksumSHA256 != nil {
 		soi.ObjectChecksum = resp.ChecksumSHA256
+		soi.FileExists = true
 	}
 
 	return nil

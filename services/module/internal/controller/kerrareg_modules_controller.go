@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -26,6 +27,7 @@ import (
 	"golang.org/x/mod/semver"
 	"k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -115,7 +117,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 			moduleVersionRef := &types.ModuleVersion{
 				Name:     moduleVersionName,
-				FileName: *moduleVersionFileName,
+				FileName: moduleVersionFileName,
 			}
 			moduleVersionRefs[version.Version] = moduleVersionRef
 
@@ -136,9 +138,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				r.Log.Error(err, "Failed to update Module status",
 					"module", module.Name,
 				)
-				return ctrl.Result{
-					RequeueAfter: time.Duration(30 * time.Second),
-				}, err
+				return ctrl.Result{}, err
 			}
 
 			moduleVersion, err := r.versionForModule(module, moduleName, moduleVersionFileName, object, version)
@@ -147,19 +147,32 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 					"moduleVersion", version.Version,
 					"module", module.Name,
 				)
-				return ctrl.Result{
-					RequeueAfter: time.Duration(30 * time.Second),
-				}, err
+				return ctrl.Result{}, err
 			}
 
-			err = r.Create(ctx, moduleVersion, &client.CreateOptions{
-				FieldManager: kerraregControllerName,
-			})
-			if err != nil {
-				r.Log.Error(err, "Unable to create new module version", "module", module.Name, "moduleVersion", version.Version)
-				return ctrl.Result{
-					RequeueAfter: time.Duration(30 * time.Second),
-				}, err
+			var currentModuleVersion versionv1alpha1.Version
+			if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+				if err = r.Get(ctx, object, &currentModuleVersion); err != nil {
+					return err
+				}
+
+				// There are instances where the module Version has been created already
+				// so this will catch the current Version's resource version and if it's
+				// not an empty string return
+				if currentModuleVersion.ObjectMeta.ResourceVersion != "" {
+					return nil
+				}
+
+				err = r.Create(ctx, moduleVersion, &client.CreateOptions{
+					FieldManager: kerraregControllerName,
+				})
+				if err != nil {
+					return err
+				}
+
+				return nil
+			}); err != nil {
+				r.Log.Error(err, "unable to create the new module Version", "moduleVersion", version.Version)
 			}
 
 			r.Log.V(5).Info("Successfully created module version",
@@ -169,7 +182,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		} else {
 			moduleVersionRef := &types.ModuleVersion{
 				Name:     moduleVersionName,
-				FileName: module.Status.ModuleVersionRefs[version.Version].FileName,
+				FileName: moduleVersion.Spec.FileName,
 			}
 
 			// The module version already exists so reconcile it
@@ -181,14 +194,18 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 			updateModuleVersion, err := r.versionForModule(module, moduleName, moduleVersion.Spec.FileName, object, version)
 			if err != nil {
-				return reconcile.Result{
-					RequeueAfter: time.Duration(30 * time.Second),
-				}, err
+				return reconcile.Result{}, err
 			}
 
 			updateModuleVersion.ObjectMeta.ResourceVersion = moduleVersion.ObjectMeta.ResourceVersion
+			var currentModuleVersion versionv1alpha1.Version
 			if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-				if err = r.Update(ctx, updateModuleVersion); err != nil {
+				if err = r.Get(ctx, object, &currentModuleVersion); err != nil {
+					return err
+				}
+
+				currentModuleVersion = *updateModuleVersion
+				if err = r.Update(ctx, &currentModuleVersion); err != nil {
 					return err
 				}
 
@@ -198,9 +215,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 					"moduleVersion", updateModuleVersion.Spec.Version,
 					"module", module.Name,
 				)
-				return reconcile.Result{
-					RequeueAfter: time.Duration(30 * time.Second),
-				}, err
+				return reconcile.Result{}, err
 			}
 
 			moduleVersionRefs[version.Version] = moduleVersionRef
@@ -217,30 +232,29 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, fmt.Errorf("latestVersion is nil: %v", module.Spec)
 	}
 
+	// If ForceSync is true set it to false
+	// now that we have successfully reconciled
 	var currentModule modulev1alpha1.Module
-	if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		if err = r.Get(ctx, req.NamespacedName, &currentModule); err != nil {
-			return err
-		}
-		// If ForceSync is true set it to false
-		// now that we have successfully reconciled
-		if module.Spec.ForceSync {
-			currentModule.Spec.ForceSync = false
-		}
+	if module.Spec.ForceSync {
+		currentModule.Spec.ForceSync = false
 
-		if err = r.Update(ctx, &currentModule, &client.UpdateOptions{
-			FieldManager: kerraregControllerName,
+		if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			if err = r.Get(ctx, req.NamespacedName, &currentModule); err != nil {
+				return err
+			}
+
+			if err = r.Update(ctx, &currentModule, &client.UpdateOptions{
+				FieldManager: kerraregControllerName,
+			}); err != nil {
+				return err
+			}
+			return nil
 		}); err != nil {
-			return err
+			r.Log.Error(err, "Failed to update Module",
+				"module", module.Name,
+			)
+			return ctrl.Result{}, err
 		}
-		return nil
-	}); err != nil {
-		r.Log.Error(err, "Failed to update Module",
-			"module", module.Name,
-		)
-		return ctrl.Result{
-			RequeueAfter: time.Duration(30 * time.Second),
-		}, err
 	}
 
 	if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -261,9 +275,11 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		r.Log.Error(err, "Failed to update Module status",
 			"module", module.Name,
 		)
-		return ctrl.Result{
-			RequeueAfter: time.Duration(30 * time.Second),
-		}, err
+		return ctrl.Result{}, err
+	}
+
+	if err = r.ReconcileVersionRemovals(ctx, *module); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	r.Log.V(5).Info("Successfully reconciled Module",
@@ -271,6 +287,42 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	)
 
 	return ctrl.Result{}, nil
+}
+
+// ReconcileVersionRemovals ensures that orphaned Versions are properly removed from the cluster when
+// any Version has been removed from module.Spec.Versions field.
+func (r *KerraregReconciler) ReconcileVersionRemovals(ctx context.Context, module modulev1alpha1.Module) error {
+	versionList := versionv1alpha1.VersionList{}
+	labelsMap := map[string]string{
+		"kerrareg.io/module":    module.Name,
+		"kerrareg.io/namespace": module.Namespace,
+	}
+
+	selectorString := labels.FormatLabels(labelsMap)
+	labelSelector, err := labels.Parse(selectorString)
+	if err != nil {
+		return err
+	}
+
+	if err = r.List(ctx, &versionList, &client.ListOptions{
+		LabelSelector: labelSelector,
+	}); err != nil {
+		return err
+	}
+
+	for _, version := range versionList.Items {
+		moduleVersion := types.ModuleVersion{
+			Version: version.Spec.Version,
+		}
+		if !slices.Contains(module.Spec.Versions, moduleVersion) {
+			r.Log.Info("Deleting module version", "module", module.ObjectMeta.Name, "version", version.Spec.Version)
+			if err = r.Delete(ctx, &version); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -305,7 +357,7 @@ func (r *KerraregReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// GenerateFileName returns a randomly generated UUID7 string that includes the module's file extension.
+// generateFileName returns a randomly generated UUID7 string that includes the module's file extension.
 func generateFileName(module *modulev1alpha1.Module) (*string, error) {
 	moduleVersionFileUUID, err := uuid.NewV7()
 	if err != nil {
@@ -369,7 +421,7 @@ func sanitizeModuleVersion(version string) string {
 	return version
 }
 
-// versionForModule creates a new Version for a Module and sets the owner field of the
+// versionForModule creates a new Version for a Module and sets the controller reference
 func (r *KerraregReconciler) versionForModule(module *modulev1alpha1.Module, moduleName *string, moduleVersionFileName *string, object client.ObjectKey, version types.ModuleVersion) (*versionv1alpha1.Version, error) {
 	moduleVersion := &versionv1alpha1.Version{
 		ObjectMeta: v1.ObjectMeta{
@@ -381,8 +433,12 @@ func (r *KerraregReconciler) versionForModule(module *modulev1alpha1.Module, mod
 			},
 		},
 		Spec: versionv1alpha1.VersionSpec{
-			Version: version.Version,
-			Type:    types.KerraregModule,
+			FileName: moduleVersionFileName,
+			Type:     types.KerraregModule,
+			Version:  version.Version,
+			ModuleConfigRef: types.ModuleConfig{
+				Name: moduleName,
+			},
 		},
 	}
 

@@ -19,18 +19,24 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/go-logr/logr"
-	"github.com/google/go-github/v50/github"
+	"github.com/google/go-github/v81/github"
 	"github.com/hashicorp/go-version"
 	"k8s.io/apimachinery/pkg/api/errors"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"kerrareg/api/types"
 	kerraregGithub "kerrareg/pkg/github"
 	"kerrareg/services/depot/api/v1alpha1"
 	depotv1alpha1 "kerrareg/services/depot/api/v1alpha1"
+	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
 )
 
 // Depot reconciles a Depot object
@@ -43,14 +49,8 @@ type DepotReconciler struct {
 // +kubebuilder:rbac:groups=kerrareg.io,resources=depots,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kerrareg.io,resources=depots/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=kerrareg.io,resources=depots/finalizers,verbs=update
+// +kubebuilder:rbac:groups=kerrareg.io,resources=modules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get
-
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Depot object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
@@ -73,54 +73,131 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	)
 
 	if len(depot.Spec.ModuleConfigs) > 0 {
-		for _, module := range depot.Spec.ModuleConfigs {
+		for _, moduleConfig := range depot.Spec.ModuleConfigs {
 			var githubClient *github.Client
 			githubConfig, err := kerraregGithub.GetGithubApplicationSecret(ctx, r.Client, depot.Namespace)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 
-			r.Log.Info("Github client config", "config", githubConfig)
-
-			authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, module.GithubClientConfig.UseAuthenticatedClient, githubConfig)
+			authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, moduleConfig.GithubClientConfig.UseAuthenticatedClient, githubConfig)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 
-			r.Log.Info("Github client", "client", authGithubClient)
-
 			githubClient = authGithubClient
-			releases, resp, err := githubClient.Repositories.ListReleases(ctx, module.RepoOwner, *module.Name, &github.ListOptions{
+			opt := &github.ListOptions{
+				Page:    1,
 				PerPage: 100,
-			})
-
-			if releases == nil || resp == nil {
-				return ctrl.Result{}, fmt.Errorf("releases was nil")
 			}
 
-			constraints, err := version.NewConstraint(module.VersionConstraints)
+			constraints, err := version.NewConstraint(moduleConfig.VersionConstraints)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 
 			var matchedVersions []string
-			for _, release := range releases {
-				r.Log.Info("Release tag name", "tagName", release.TagName)
+			for {
+				releases, resp, err := githubClient.Repositories.ListReleases(ctx, moduleConfig.RepoOwner, *moduleConfig.Name, opt)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
+
+				if releases == nil || resp == nil {
+					return ctrl.Result{}, fmt.Errorf("releases was nil")
+				}
 
 				for _, constraint := range constraints {
-					version, err := version.NewVersion(*release.TagName)
-					if err != nil {
-						r.Log.Error(err, "Unable to create new go-version")
-						return ctrl.Result{}, err
-					}
+					for _, release := range releases {
+						version, err := version.NewVersion(*release.TagName)
+						if err != nil {
+							r.Log.Error(err, "Unable to create new go-version")
+							return ctrl.Result{}, err
+						}
 
-					if constraint.Check(version) {
-						matchedVersions = append(matchedVersions, version.String())
+						constraintString := strings.TrimSpace(constraint.String())
+						if constraint.Check(version) {
+							if strings.HasPrefix(constraintString, `>=`) || strings.HasPrefix(constraintString, `<=`) || strings.HasPrefix(constraintString, `~>`) {
+								if slices.Contains(matchedVersions, version.String()) {
+									continue
+								}
+
+								matchedVersions = append(matchedVersions, version.String())
+							}
+						} else {
+							if strings.HasPrefix(constraintString, `!=`) {
+								if !slices.Contains(matchedVersions, version.String()) {
+									continue
+								}
+
+								i := slices.Index(matchedVersions, version.String())
+								if i == -1 {
+									continue
+								}
+
+								matchedVersions = slices.Delete(matchedVersions, i, i+1)
+								break
+							}
+						}
 					}
+				}
+
+				if resp.NextPage == 0 {
+					break
+				}
+
+				opt.Page = resp.NextPage
+			}
+
+			r.Log.Info("Matched versions for module", "module", moduleConfig.Name, "versions", matchedVersions)
+
+			var versions []types.ModuleVersion
+			for _, version := range matchedVersions {
+				moduleVersion := types.ModuleVersion{
+					Version: version,
+				}
+				versions = append(versions, moduleVersion)
+			}
+
+			module := modulev1alpha1.Module{
+				ObjectMeta: v1.ObjectMeta{
+					Name:      *moduleConfig.Name,
+					Namespace: req.Namespace,
+				},
+				Spec: modulev1alpha1.ModuleSpec{
+					ModuleConfig: moduleConfig,
+					Versions:     versions,
+				},
+			}
+
+			moduleObject := client.ObjectKey{
+				Name:      module.ObjectMeta.Name,
+				Namespace: module.ObjectMeta.Namespace,
+			}
+
+			var currentModule modulev1alpha1.Module
+			err = r.Get(ctx, moduleObject, &currentModule)
+			if err != nil {
+				if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+					if err := r.Create(ctx, &module); err != nil {
+						return err
+					}
+					return nil
+				}); err != nil {
+					return ctrl.Result{}, err
 				}
 			}
 
-			r.Log.Info("Matched versions", "versions", matchedVersions)
+			if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+				currentModule.Spec.ModuleConfig = moduleConfig
+				if err := r.Update(ctx, &currentModule); err != nil {
+					return err
+				}
+				return nil
+			}); err != nil {
+				return ctrl.Result{}, err
+			}
+
 		}
 	}
 

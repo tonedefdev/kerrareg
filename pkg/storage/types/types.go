@@ -15,18 +15,19 @@ const (
 
 // StorageObjectInput is common configuration for various storage systems.
 type StorageObjectInput struct {
-	// The sha256 checksum of the Github archive as a base64 encoded string
+	// The sha256 checksum of the Github archive as a base64 encoded string.
 	ArchiveChecksum *string
 	// The storage method to use. One of 'Get', 'Delete', or 'Put'
 	Method StorageMethod
-	// The archive file as a bite slice
+	// The archive file as a bite slice.
 	FileBytes []byte
-	// A flag to determine if the underlying storage system was able to determine if the file exists
-	FileNotExists bool
-	// The file path of the storage object. This may be a reference to a cloud storage path such as an S3 Bucket key or an Azure Storage Blob
+	// A flag set to true when the storage system determines the file exists.
+	FileExists bool
+	// The file path of the storage object. This may be a reference to a cloud storage path such as an `AWS S3 Bucket` key or an `Azure Storage Blob`.
+	// It may also refer to a filesystem path like `/foo/bar` on *nix based systems or `C:\foo\bar` for Windows.
 	FilePath *string
-	// The checksum of the object in the storage system.
+	// The sha256 checksum of the object from the storage system as a base64 encoded string.
 	ObjectChecksum *string
-	// The Version spec of the object Version
+	// The Version spec of the object Version.
 	Version *versionv1alpha1.Version
 }

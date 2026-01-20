@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"io"
 	"os"
 	"path"
 
@@ -26,17 +27,34 @@ func (storage *FileSystem) fileExists(filename string) (bool, error) {
 	return false, err
 }
 
-// GetObjectChecksum determines if the file exists and sets the soi receiver's field 'FileNotExists' to true if the file cannot be found.
-// When the file is found the function sets the soi receiver's field 'ObjectChecksum' with the base64 encoded sha256 checksum of the file.
+// GetObject retrieves the object from the filesystem and returns an io.Reader to stream the file from the server
+func (storage *FileSystem) GetObject(ctx context.Context, soi *types.StorageObjectInput) (io.Reader, error) {
+	fileExists, err := storage.fileExists(*soi.FilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	if !fileExists {
+		return nil, err
+	}
+
+	fileReader, err := os.Open(*soi.FilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	return fileReader, nil
+}
+
+// GetObjectChecksum determines if the file exists and sets the soi receiver's field `FileExists` to true if the file exists.
+// When the file is found the function sets the soi receiver's field `ObjectChecksum` with the base64 encoded sha256 checksum of the file.
 func (storage *FileSystem) GetObjectChecksum(ctx context.Context, soi *types.StorageObjectInput) error {
 	fileExists, err := storage.fileExists(*soi.FilePath)
 	if err != nil {
-		soi.FileNotExists = true
 		return err
 	}
 
 	if !fileExists {
-		soi.FileNotExists = true
 		return err
 	}
 
@@ -48,12 +66,16 @@ func (storage *FileSystem) GetObjectChecksum(ctx context.Context, soi *types.Sto
 	sha256Sum := sha256.Sum256(fileBytes)
 	checksumSha256 := base64.StdEncoding.EncodeToString(sha256Sum[:])
 	soi.ObjectChecksum = &checksumSha256
+	soi.FileExists = true
 	return nil
 }
 
 // DeleteObject removes the object received by soi from the filesystem.
 func (storage *FileSystem) DeleteObject(ctx context.Context, soi *types.StorageObjectInput) error {
 	if err := os.Remove(*soi.FilePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 

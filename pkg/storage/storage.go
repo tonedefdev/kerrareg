@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io"
 	"kerrareg/pkg/storage/types"
 )
 
@@ -10,7 +11,10 @@ import (
 type Storage interface {
 	// Deletes a file from the configured storage system.
 	DeleteObject(ctx context.Context, soi *types.StorageObjectInput) error
-	// Gets the checksum of the file from the configured storage system.
+	// GetObject returns an io.Reader to stream the file from the underlying storage system.
+	GetObject(ctx context.Context, soi *types.StorageObjectInput) (io.Reader, error)
+	// Gets the checksum of the file from the configured storage system. When it exists the function should store the value
+	// in the soi receiver's field `ObjectChecksum` and set its `FileExists` field to `true`.
 	GetObjectChecksum(ctx context.Context, soi *types.StorageObjectInput) error
 	// Puts a new file into the configured storage system.
 	PutObject(ctx context.Context, soi *types.StorageObjectInput) error

@@ -138,6 +138,12 @@ spec:
                         - region
                         type: object
                     type: object
+                  versionConstraints:
+                    description: |-
+                      A comma separated list of version constraints such as
+                      '1.2.1' or '>= 1.0.0, < 2.0.0' or '~> 1.0.0, != 1.0.2'. This field is only
+                      respected by the Depot controller.
+                    type: string
                 type: object
               versions:
                 description: |-

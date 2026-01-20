@@ -10,11 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"k8s.io/client-go/kubernetes"
@@ -22,6 +21,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"kerrareg/api/types"
+	"kerrareg/pkg/storage"
+	storageTypes "kerrareg/pkg/storage/types"
 	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
 	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
 )
@@ -37,7 +38,7 @@ func init() {
 }
 
 func main() {
-	kerraregUseBearerToken = flag.Bool("use-bearer-token", false, "when true use a bearer token instead of a base64 encoded kubeconfig")
+	kerraregUseBearerToken = flag.Bool("use-bearer-token", false, "when true use a bearer token instead of a base64 encoded kubeconfig to authenticate with the kubernetes API server")
 	flag.Parse()
 
 	r := chi.NewRouter()
@@ -45,7 +46,11 @@ func main() {
 	r.Get("/.well-known/terraform.json", serviceDiscoveryHandler)
 	r.Get("/kerrareg/modules/v1/{namespace}/{name}/{system}/versions", getModuleVersions)
 	r.Get("/kerrareg/modules/v1/{namespace}/{name}/{system}/{version}/download", getDownloadModuleUrl)
+
+	r.Get("/kerrareg/modules/v1/download/azure/{subID}/{rg}/{account}/{accountUrl}/{name}/{fileName}", serveModuleFromAzureBlob)
+	r.Get("/kerrareg/modules/v1/download/fileSystem/{directory}/{name}/{fileName}", serveModuleFromFileSystem)
 	r.Get("/kerrareg/modules/v1/download/s3/{bucket}/{region}/{name}/{fileName}", serveModuleFromS3)
+
 	http.ListenAndServeTLS("", "/Users/tonedefdev/Desktop/kerrareg.defdev.io/certificate.crt", "/Users/tonedefdev/Desktop/kerrareg.defdev.io/private.key", r)
 }
 
@@ -97,13 +102,22 @@ func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r 
 
 func getDownloadModuleUrl(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	kubeconfig, err := extractKubeconfig(w, r)
-	if err != nil {
-		logger.Error("unable to extract kubeconfig from token header", "error", err)
-		return
+	var kubeconfig []byte
+	var bearerToken string
+
+	if *kerraregUseBearerToken {
+		bearerToken = r.Header.Get("Authorization")
+	} else {
+		config, err := extractKubeconfig(w, r)
+		if err != nil {
+			logger.Error("unable to extract kubeconfig", "error", err)
+			return
+		}
+
+		kubeconfig = config
 	}
 
-	clientset, err := generateKubeClient(kubeconfig, nil, false)
+	clientset, err := generateKubeClient(kubeconfig, &bearerToken, *kerraregUseBearerToken)
 	if err != nil {
 		logger.Error("unable to generate kubeclient", "error", err)
 		return
@@ -115,20 +129,100 @@ func getDownloadModuleUrl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	checksumQuery := url.QueryEscape(*moduleVersion.Status.Checksum)
-
 	var downloadPath string
-	if moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3 != nil {
-		downloadPath = fmt.Sprintf("s3/%s/%s/%s?fileChecksum=%s",
-			moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Bucket,
-			moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Region,
-			*moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Key,
-			checksumQuery,
+	if moduleVersion.Spec.ModuleConfigRef.StorageConfig.AzureStorage != nil {
+		downloadPath = fmt.Sprintf("azure/%s/%s/%s/%s/%s/%s",
+			moduleVersion.Spec.ModuleConfigRef.StorageConfig.AzureStorage.SubscriptionID,
+			moduleVersion.Spec.ModuleConfigRef.StorageConfig.AzureStorage.ResourceGroup,
+			moduleVersion.Spec.ModuleConfigRef.StorageConfig.AzureStorage.AccountName,
+			url.PathEscape(moduleVersion.Spec.ModuleConfigRef.StorageConfig.AzureStorage.AccountUrl),
+			*moduleVersion.Spec.ModuleConfigRef.Name,
+			*moduleVersion.Spec.FileName,
 		)
 	}
 
-	w.Header().Set("X-Terraform-Get", fmt.Sprintf("/kerrareg/modules/v1/download/%s", downloadPath))
+	if moduleVersion.Spec.ModuleConfigRef.StorageConfig.FileSystem != nil {
+		downloadPath = fmt.Sprintf("fileSystem/%s/%s/%s",
+			url.PathEscape(*moduleVersion.Spec.ModuleConfigRef.StorageConfig.FileSystem.DirectoryPath),
+			*moduleVersion.Spec.ModuleConfigRef.Name,
+			*moduleVersion.Spec.FileName,
+		)
+	}
+
+	if moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3 != nil {
+		downloadPath = fmt.Sprintf("s3/%s/%s/%s",
+			moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Bucket,
+			moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Region,
+			url.PathEscape(*moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Key),
+		)
+	}
+
+	checksumQuery := url.QueryEscape(*moduleVersion.Status.Checksum)
+	w.Header().Set("X-Terraform-Get", fmt.Sprintf("/kerrareg/modules/v1/download/%s?fileChecksum=%s", downloadPath, checksumQuery))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func serveModuleFromAzureBlob(w http.ResponseWriter, r *http.Request) {
+	accountName := chi.URLParam(r, "account")
+	accountUrl := chi.URLParam(r, "accountUrl")
+	rg := chi.URLParam(r, "rg")
+	subID := chi.URLParam(r, "subID")
+
+	name := chi.URLParam(r, "name")
+	fileName := chi.URLParam(r, "fileName")
+	checksum := r.URL.Query().Get("fileChecksum")
+
+	storage := &storage.AzureBlobStorage{}
+	if err := storage.NewClients(subID, accountUrl); err != nil {
+		logger.Error("failed to init azure clients", "error", err, "storageAccountName", accountName)
+		http.Error(w, "failed to get module", http.StatusInternalServerError)
+		return
+	}
+
+	version := &versionv1alpha1.Version{
+		Spec: versionv1alpha1.VersionSpec{
+			ModuleConfigRef: types.ModuleConfig{
+				Name: &name,
+				StorageConfig: types.StorageConfig{
+					AzureStorage: &types.AzureStorageConfig{
+						AccountName:    accountName,
+						AccountUrl:     accountUrl,
+						ResourceGroup:  rg,
+						SubscriptionID: subID,
+					},
+				},
+			},
+		},
+	}
+
+	soi := &storageTypes.StorageObjectInput{
+		FilePath: &fileName,
+		Method:   storageTypes.Get,
+		Version:  version,
+	}
+
+	getObjectFromStorageSystem(w, r, storage, soi, checksum)
+}
+
+func serveModuleFromFileSystem(w http.ResponseWriter, r *http.Request) {
+	dir := chi.URLParam(r, "directory")
+	moduleName := chi.URLParam(r, "name")
+	fileName := chi.URLParam(r, "fileName")
+	checksum := r.URL.Query().Get("fileChecksum")
+
+	filePath := path.Join(
+		dir,
+		moduleName,
+		fileName,
+	)
+
+	storage := &storage.FileSystem{}
+	soi := &storageTypes.StorageObjectInput{
+		FilePath: &filePath,
+		Method:   storageTypes.Get,
+	}
+
+	getObjectFromStorageSystem(w, r, storage, soi, checksum)
 }
 
 func serveModuleFromS3(w http.ResponseWriter, r *http.Request) {
@@ -138,37 +232,63 @@ func serveModuleFromS3(w http.ResponseWriter, r *http.Request) {
 	fileName := chi.URLParam(r, "fileName")
 	checksum := r.URL.Query().Get("fileChecksum")
 
-	cfg, err := config.LoadDefaultConfig(r.Context(), config.WithRegion(region))
-	if err != nil {
-		logger.Error("unable to load SDK config", "error", err)
-	}
-
-	s3Client := s3.NewFromConfig(cfg)
-	result, err := s3Client.GetObject(r.Context(), &s3.GetObjectInput{
-		Bucket: &bucket,
-		Key:    aws.String(fmt.Sprintf("%s/%s", name, fileName)),
-	})
-	if err != nil {
-		logger.Error("failed to get module from S3 bucket", "error", err, "bucket", bucket)
-	}
-
-	if result.ChecksumSHA256 == nil {
-		logger.Error("failed to get ChecksumSHA256 from S3 bucket", "error", err, "bucket", bucket)
-		http.Error(w, "missing checksum", http.StatusInternalServerError)
+	storage := &storage.AmazonS3Storage{}
+	if err := storage.NewClient(r.Context(), region); err != nil {
+		logger.Error("failed to init s3 client", "error", err, "bucket", bucket)
+		http.Error(w, "failed to get module", http.StatusInternalServerError)
 		return
 	}
 
-	if *result.ChecksumSHA256 != checksum {
-		logger.Error("checksum mismatch from s3 bucket ChecksumSHA256", "moduleVersionChecksum", checksum, "s3Checksum", *result.ChecksumSHA256)
+	version := versionv1alpha1.Version{
+		Spec: versionv1alpha1.VersionSpec{
+			ModuleConfigRef: types.ModuleConfig{
+				StorageConfig: types.StorageConfig{
+					S3: &types.AmazonS3Config{
+						Bucket: bucket,
+					},
+				},
+			},
+		},
+	}
+
+	soi := &storageTypes.StorageObjectInput{
+		FilePath: aws.String(fmt.Sprintf("%s/%s", name, fileName)),
+		Method:   storageTypes.Get,
+		Version:  &version,
+	}
+
+	getObjectFromStorageSystem(w, r, storage, soi, checksum)
+}
+
+// getObjectFromStorage validates the object's sha256 checksum and when valid copies from the storage system src to the
+// download stream dst provided by http.ResponseWriter
+func getObjectFromStorageSystem(w http.ResponseWriter, r *http.Request, storage storage.Storage, soi *storageTypes.StorageObjectInput, checksum string) {
+	if err := storage.GetObjectChecksum(r.Context(), soi); err != nil {
+		logger.Error("failed to get checksum from storage system", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	if result.ContentType != nil {
-		w.Header().Set("Content-Type", *result.ContentType)
+	if soi.ObjectChecksum != nil && *soi.ObjectChecksum != checksum {
+		logger.Error("checksum mismatch from storage system", "want", checksum, "received", *soi.ObjectChecksum)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	if _, err := io.Copy(w, result.Body); err != nil {
+	reader, err := storage.GetObject(r.Context(), soi)
+	if err != nil {
+		logger.Error("failed to get module from storage system", "error", err)
+		http.Error(w, "failed to get module", http.StatusInternalServerError)
+		return
+	}
+
+	if strings.HasSuffix(*soi.FilePath, ".zip") {
+		w.Header().Set("Content-Type", "application/zip")
+	} else {
+		w.Header().Set("Content-Type", "application/x-tar")
+	}
+
+	if _, err := io.Copy(w, reader); err != nil {
 		http.Error(w, fmt.Sprintf("failed to stream file: %v", err), http.StatusInternalServerError)
 		return
 	}
