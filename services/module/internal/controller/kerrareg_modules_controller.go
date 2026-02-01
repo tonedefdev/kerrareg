@@ -38,9 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"kerrareg/api/types"
-	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
-	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
+	kerraregv1alpha1 "kerrareg/api/v1alpha1"
 )
 
 const (
@@ -69,7 +67,7 @@ type KerraregReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	module := &modulev1alpha1.Module{}
+	module := &kerraregv1alpha1.Module{}
 	err := r.Get(ctx, req.NamespacedName, module)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -82,7 +80,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	moduleName := getModuleName(module)
-	moduleVersionRefs := make(map[string]*types.ModuleVersion)
+	moduleVersionRefs := make(map[string]*kerraregv1alpha1.ModuleVersion)
 
 	for _, version := range module.Spec.Versions {
 		r.Log.V(5).Info("Processing version", "moduleVersion", version.Version, "module", module.Name)
@@ -94,7 +92,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			Namespace: module.Namespace,
 		}
 
-		moduleVersion := &versionv1alpha1.Version{}
+		moduleVersion := &kerraregv1alpha1.Version{}
 		err = r.Get(ctx, object, moduleVersion)
 		// The module version was not found so create it
 		if err != nil {
@@ -115,7 +113,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				}, err
 			}
 
-			moduleVersionRef := &types.ModuleVersion{
+			moduleVersionRef := &kerraregv1alpha1.ModuleVersion{
 				Name:     moduleVersionName,
 				FileName: moduleVersionFileName,
 			}
@@ -150,7 +148,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				return ctrl.Result{}, err
 			}
 
-			var currentModuleVersion versionv1alpha1.Version
+			var currentModuleVersion kerraregv1alpha1.Version
 			if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 				if err = r.Get(ctx, object, &currentModuleVersion); err != nil {
 					return err
@@ -180,11 +178,6 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				"module", module.Name,
 			)
 		} else {
-			moduleVersionRef := &types.ModuleVersion{
-				Name:     moduleVersionName,
-				FileName: moduleVersion.Spec.FileName,
-			}
-
 			// The module version already exists so reconcile it
 			r.Log.V(5).Info(
 				"Module version found: reconciling based on its config",
@@ -192,13 +185,18 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				"module", module.Name,
 			)
 
+			moduleVersionRef := &kerraregv1alpha1.ModuleVersion{
+				Name:     moduleVersionName,
+				FileName: moduleVersion.Spec.FileName,
+			}
+
 			updateModuleVersion, err := r.versionForModule(module, moduleName, moduleVersion.Spec.FileName, object, version)
 			if err != nil {
 				return reconcile.Result{}, err
 			}
 
 			updateModuleVersion.ObjectMeta.ResourceVersion = moduleVersion.ObjectMeta.ResourceVersion
-			var currentModuleVersion versionv1alpha1.Version
+			var currentModuleVersion kerraregv1alpha1.Version
 			if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 				if err = r.Get(ctx, object, &currentModuleVersion); err != nil {
 					return err
@@ -234,7 +232,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// If ForceSync is true set it to false
 	// now that we have successfully reconciled
-	var currentModule modulev1alpha1.Module
+	var currentModule kerraregv1alpha1.Module
 	if module.Spec.ForceSync {
 		currentModule.Spec.ForceSync = false
 
@@ -291,8 +289,8 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 // ReconcileVersionRemovals ensures that orphaned Versions are properly removed from the cluster when
 // any Version has been removed from module.Spec.Versions field.
-func (r *KerraregReconciler) ReconcileVersionRemovals(ctx context.Context, module modulev1alpha1.Module) error {
-	versionList := versionv1alpha1.VersionList{}
+func (r *KerraregReconciler) ReconcileVersionRemovals(ctx context.Context, module kerraregv1alpha1.Module) error {
+	versionList := kerraregv1alpha1.VersionList{}
 	labelsMap := map[string]string{
 		"kerrareg.io/module":    module.Name,
 		"kerrareg.io/namespace": module.Namespace,
@@ -311,7 +309,7 @@ func (r *KerraregReconciler) ReconcileVersionRemovals(ctx context.Context, modul
 	}
 
 	for _, version := range versionList.Items {
-		moduleVersion := types.ModuleVersion{
+		moduleVersion := kerraregv1alpha1.ModuleVersion{
 			Version: version.Spec.Version,
 		}
 		if !slices.Contains(module.Spec.Versions, moduleVersion) {
@@ -334,42 +332,39 @@ func (r *KerraregReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			return false
 		},
 
-		// Do not reconcile on create events
 		CreateFunc: func(e event.CreateEvent) bool {
 			return false
 		},
 
-		// Allow delete events
 		DeleteFunc: func(e event.DeleteEvent) bool {
 			return false
 		},
 
-		// Do not allow generic events (e.g., external triggers)
 		GenericFunc: func(e event.GenericEvent) bool {
 			return false
 		},
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&modulev1alpha1.Module{}).
-		Owns(&versionv1alpha1.Version{}, builder.WithPredicates(versionPredicates)).
+		For(&kerraregv1alpha1.Module{}).
+		Owns(&kerraregv1alpha1.Version{}, builder.WithPredicates(versionPredicates)).
 		Named(kerraregControllerName).
 		Complete(r)
 }
 
 // generateFileName returns a randomly generated UUID7 string that includes the module's file extension.
-func generateFileName(module *modulev1alpha1.Module) (*string, error) {
+func generateFileName(module *kerraregv1alpha1.Module) (*string, error) {
 	moduleVersionFileUUID, err := uuid.NewV7()
 	if err != nil {
 		return nil, err
 	}
 
-	moduleVersionFileName := fmt.Sprintf("%s.%s", moduleVersionFileUUID, module.Spec.ModuleConfig.FileFormat)
+	moduleVersionFileName := fmt.Sprintf("%s.%s", moduleVersionFileUUID, *module.Spec.ModuleConfig.FileFormat)
 	return &moduleVersionFileName, nil
 }
 
 // getLatestVersion returns the latest semantic version of a Module
-func getLatestVersion(module modulev1alpha1.Module) *string {
+func getLatestVersion(module kerraregv1alpha1.Module) *string {
 	versions := make([]string, len(module.Spec.Versions))
 	for _, version := range module.Spec.Versions {
 		var semverString string
@@ -389,7 +384,7 @@ func getLatestVersion(module modulev1alpha1.Module) *string {
 
 // getModuleName returns the module name as the Module resource's name if
 // the configuration field for ModuleConfig.Name is nil.
-func getModuleName(module *modulev1alpha1.Module) *string {
+func getModuleName(module *kerraregv1alpha1.Module) *string {
 	var moduleName string
 	if module.Spec.ModuleConfig.Name != nil {
 		moduleName = *module.Spec.ModuleConfig.Name
@@ -401,7 +396,7 @@ func getModuleName(module *modulev1alpha1.Module) *string {
 
 // GetModuleName returns the module name as either the namespace of the Module object or
 // from the ModuleConfig field if it's non-nil.
-func getModuleVersionName(module *modulev1alpha1.Module, sanitizedModuleVersion string) string {
+func getModuleVersionName(module *kerraregv1alpha1.Module, sanitizedModuleVersion string) string {
 	var moduleVersionName string
 	if module.Spec.ModuleConfig.Name == nil {
 		moduleVersionName = fmt.Sprintf("%s-%s", module.Name, sanitizedModuleVersion)
@@ -422,8 +417,8 @@ func sanitizeModuleVersion(version string) string {
 }
 
 // versionForModule creates a new Version for a Module and sets the controller reference
-func (r *KerraregReconciler) versionForModule(module *modulev1alpha1.Module, moduleName *string, moduleVersionFileName *string, object client.ObjectKey, version types.ModuleVersion) (*versionv1alpha1.Version, error) {
-	moduleVersion := &versionv1alpha1.Version{
+func (r *KerraregReconciler) versionForModule(module *kerraregv1alpha1.Module, moduleName *string, moduleVersionFileName *string, object client.ObjectKey, version kerraregv1alpha1.ModuleVersion) (*kerraregv1alpha1.Version, error) {
+	moduleVersion := &kerraregv1alpha1.Version{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      object.Name,
 			Namespace: object.Namespace,
@@ -432,11 +427,11 @@ func (r *KerraregReconciler) versionForModule(module *modulev1alpha1.Module, mod
 				"kerrareg.io/namespace": object.Namespace,
 			},
 		},
-		Spec: versionv1alpha1.VersionSpec{
+		Spec: kerraregv1alpha1.VersionSpec{
 			FileName: moduleVersionFileName,
-			Type:     types.KerraregModule,
+			Type:     kerraregv1alpha1.KerraregModule,
 			Version:  version.Version,
-			ModuleConfigRef: types.ModuleConfig{
+			ModuleConfigRef: &kerraregv1alpha1.ModuleConfig{
 				Name: moduleName,
 			},
 		},

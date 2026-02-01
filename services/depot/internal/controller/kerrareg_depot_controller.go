@@ -32,11 +32,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"kerrareg/api/types"
+	"kerrareg/api/v1alpha1"
+	kerraregv1alpha1 "kerrareg/api/v1alpha1"
 	kerraregGithub "kerrareg/pkg/github"
-	"kerrareg/services/depot/api/v1alpha1"
-	depotv1alpha1 "kerrareg/services/depot/api/v1alpha1"
-	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
 )
 
 // Depot reconciles a Depot object
@@ -74,13 +72,50 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	if len(depot.Spec.ModuleConfigs) > 0 {
 		for _, moduleConfig := range depot.Spec.ModuleConfigs {
+			// Set global configs if not set on module config
+			if moduleConfig.StorageConfig == nil {
+				moduleConfig.StorageConfig = depot.Spec.GlobalConfig.StorageConfig
+			}
+
+			if moduleConfig.GithubClientConfig == nil {
+				moduleConfig.GithubClientConfig = depot.Spec.GlobalConfig.GithubClientConfig
+			}
+
+			if moduleConfig.FileFormat == nil {
+				moduleConfig.FileFormat = depot.Spec.GlobalConfig.ModuleConfig.FileFormat
+			}
+
+			if moduleConfig.Immutable == nil {
+				moduleConfig.Immutable = depot.Spec.GlobalConfig.ModuleConfig.Immutable
+			}
+
+			if moduleConfig.RepoUrl == nil {
+				repoUrl := fmt.Sprintf("https://github.com/%s/%s", moduleConfig.RepoOwner, *moduleConfig.Name)
+				moduleConfig.RepoUrl = &repoUrl
+			}
+
+			module := kerraregv1alpha1.Module{
+				ObjectMeta: v1.ObjectMeta{
+					Name:      *moduleConfig.Name,
+					Namespace: req.Namespace,
+				},
+				Spec: kerraregv1alpha1.ModuleSpec{
+					ModuleConfig: moduleConfig,
+				},
+			}
+
+			moduleObject := client.ObjectKey{
+				Name:      module.ObjectMeta.Name,
+				Namespace: module.ObjectMeta.Namespace,
+			}
+
 			var githubClient *github.Client
 			githubConfig, err := kerraregGithub.GetGithubApplicationSecret(ctx, r.Client, depot.Namespace)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 
-			authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, moduleConfig.GithubClientConfig.UseAuthenticatedClient, githubConfig)
+			authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, module.Spec.ModuleConfig.GithubClientConfig.UseAuthenticatedClient, githubConfig)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -151,31 +186,17 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 			r.Log.Info("Matched versions for module", "module", moduleConfig.Name, "versions", matchedVersions)
 
-			var versions []types.ModuleVersion
+			var versions []kerraregv1alpha1.ModuleVersion
 			for _, version := range matchedVersions {
-				moduleVersion := types.ModuleVersion{
+				moduleVersion := kerraregv1alpha1.ModuleVersion{
 					Version: version,
 				}
 				versions = append(versions, moduleVersion)
 			}
 
-			module := modulev1alpha1.Module{
-				ObjectMeta: v1.ObjectMeta{
-					Name:      *moduleConfig.Name,
-					Namespace: req.Namespace,
-				},
-				Spec: modulev1alpha1.ModuleSpec{
-					ModuleConfig: moduleConfig,
-					Versions:     versions,
-				},
-			}
+			module.Spec.Versions = versions
 
-			moduleObject := client.ObjectKey{
-				Name:      module.ObjectMeta.Name,
-				Namespace: module.ObjectMeta.Namespace,
-			}
-
-			var currentModule modulev1alpha1.Module
+			var currentModule kerraregv1alpha1.Module
 			err = r.Get(ctx, moduleObject, &currentModule)
 			if err != nil {
 				if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -190,6 +211,7 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 			if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 				currentModule.Spec.ModuleConfig = moduleConfig
+				currentModule.Spec.Versions = module.Spec.Versions
 				if err := r.Update(ctx, &currentModule); err != nil {
 					return err
 				}
@@ -207,7 +229,7 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 // SetupWithManager sets up the controller with the Manager.
 func (r *DepotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&depotv1alpha1.Depot{}).
+		For(&kerraregv1alpha1.Depot{}).
 		Named("depot").
 		Complete(r)
 }

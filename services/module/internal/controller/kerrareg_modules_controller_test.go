@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
+	kerraregv1alpha1 "kerrareg/api/v1alpha1"
 )
 
 var _ = Describe("Module Controller", func() {
@@ -40,13 +40,13 @@ var _ = Describe("Module Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		kerrareg := &modulev1alpha1.Module{}
+		kerrareg := &kerraregv1alpha1.Module{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind Module")
 			err := k8sClient.Get(ctx, typeNamespacedName, kerrareg)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &modulev1alpha1.Module{
+				resource := &kerraregv1alpha1.Module{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,7 +59,7 @@ var _ = Describe("Module Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &modulev1alpha1.Module{}
+			resource := &kerraregv1alpha1.Module{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 

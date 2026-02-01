@@ -20,11 +20,9 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"kerrareg/api/types"
+	kerraregv1alpha1 "kerrareg/api/v1alpha1"
 	"kerrareg/pkg/storage"
 	storageTypes "kerrareg/pkg/storage/types"
-	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
-	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
 )
 
 var (
@@ -39,6 +37,8 @@ func init() {
 
 func main() {
 	kerraregUseBearerToken = flag.Bool("use-bearer-token", false, "when true use a bearer token instead of a base64 encoded kubeconfig to authenticate with the kubernetes API server")
+	kerraregCertPath := flag.String("tls-cert-path", "", "path to TLS certificate file for HTTPS server")
+	kerraregCertKey := flag.String("tls-cert-key", "", "path to TLS certificate key file for HTTPS server")
 	flag.Parse()
 
 	r := chi.NewRouter()
@@ -51,7 +51,12 @@ func main() {
 	r.Get("/kerrareg/modules/v1/download/fileSystem/{directory}/{name}/{fileName}", serveModuleFromFileSystem)
 	r.Get("/kerrareg/modules/v1/download/s3/{bucket}/{region}/{name}/{fileName}", serveModuleFromS3)
 
-	http.ListenAndServeTLS("", "/Users/tonedefdev/Desktop/kerrareg.defdev.io/certificate.crt", "/Users/tonedefdev/Desktop/kerrareg.defdev.io/private.key", r)
+	if *kerraregCertPath != "" && *kerraregCertKey != "" {
+		http.ListenAndServeTLS("", *kerraregCertPath, *kerraregCertKey, r)
+	} else {
+		http.ListenAndServe("", r)
+	}
+
 }
 
 type ServiceDiscoveryResponse struct {
@@ -63,7 +68,7 @@ type ModuleVersionsResponse struct {
 }
 
 type ModuleVersions struct {
-	Versions []types.ModuleVersion `json:"versions"`
+	Versions []kerraregv1alpha1.ModuleVersion `json:"versions"`
 }
 
 func serviceDiscoveryHandler(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +79,7 @@ func serviceDiscoveryHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r *http.Request) (*versionv1alpha1.Version, error) {
+func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r *http.Request) (*kerraregv1alpha1.Version, error) {
 	name := chi.URLParam(r, "name")
 	namespace := chi.URLParam(r, "namespace")
 	version := chi.URLParam(r, "version")
@@ -91,7 +96,7 @@ func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r 
 		return nil, err
 	}
 
-	var moduleVersion versionv1alpha1.Version
+	var moduleVersion kerraregv1alpha1.Version
 	if err = json.Unmarshal(result, &moduleVersion); err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return nil, err
@@ -107,6 +112,10 @@ func getDownloadModuleUrl(w http.ResponseWriter, r *http.Request) {
 
 	if *kerraregUseBearerToken {
 		bearerToken = r.Header.Get("Authorization")
+		if bearerToken == "" {
+			http.Error(w, "missing Authorization header", http.StatusUnauthorized)
+			return
+		}
 	} else {
 		config, err := extractKubeconfig(w, r)
 		if err != nil {
@@ -153,7 +162,7 @@ func getDownloadModuleUrl(w http.ResponseWriter, r *http.Request) {
 		downloadPath = fmt.Sprintf("s3/%s/%s/%s",
 			moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Bucket,
 			moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Region,
-			url.PathEscape(*moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Key),
+			*moduleVersion.Spec.ModuleConfigRef.StorageConfig.S3.Key,
 		)
 	}
 
@@ -172,6 +181,13 @@ func serveModuleFromAzureBlob(w http.ResponseWriter, r *http.Request) {
 	fileName := chi.URLParam(r, "fileName")
 	checksum := r.URL.Query().Get("fileChecksum")
 
+	accountUrl, err := url.PathUnescape(accountUrl)
+	if err != nil {
+		logger.Error("failed to unescape account url", "error", err)
+		http.Error(w, "failed to get module", http.StatusInternalServerError)
+		return
+	}
+
 	storage := &storage.AzureBlobStorage{}
 	if err := storage.NewClients(subID, accountUrl); err != nil {
 		logger.Error("failed to init azure clients", "error", err, "storageAccountName", accountName)
@@ -179,12 +195,12 @@ func serveModuleFromAzureBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	version := &versionv1alpha1.Version{
-		Spec: versionv1alpha1.VersionSpec{
-			ModuleConfigRef: types.ModuleConfig{
+	version := &kerraregv1alpha1.Version{
+		Spec: kerraregv1alpha1.VersionSpec{
+			ModuleConfigRef: &kerraregv1alpha1.ModuleConfig{
 				Name: &name,
-				StorageConfig: types.StorageConfig{
-					AzureStorage: &types.AzureStorageConfig{
+				StorageConfig: &kerraregv1alpha1.StorageConfig{
+					AzureStorage: &kerraregv1alpha1.AzureStorageConfig{
 						AccountName:    accountName,
 						AccountUrl:     accountUrl,
 						ResourceGroup:  rg,
@@ -209,6 +225,15 @@ func serveModuleFromFileSystem(w http.ResponseWriter, r *http.Request) {
 	moduleName := chi.URLParam(r, "name")
 	fileName := chi.URLParam(r, "fileName")
 	checksum := r.URL.Query().Get("fileChecksum")
+
+	dir, err := url.PathUnescape(dir)
+	if err != nil {
+		logger.Error("failed to unescape file name", "error", err)
+		http.Error(w, "failed to get module", http.StatusInternalServerError)
+		return
+	}
+
+	logger.Info("the unescaped dir", "dir", dir)
 
 	filePath := path.Join(
 		dir,
@@ -239,11 +264,11 @@ func serveModuleFromS3(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	version := versionv1alpha1.Version{
-		Spec: versionv1alpha1.VersionSpec{
-			ModuleConfigRef: types.ModuleConfig{
-				StorageConfig: types.StorageConfig{
-					S3: &types.AmazonS3Config{
+	version := kerraregv1alpha1.Version{
+		Spec: kerraregv1alpha1.VersionSpec{
+			ModuleConfigRef: &kerraregv1alpha1.ModuleConfig{
+				StorageConfig: &kerraregv1alpha1.StorageConfig{
+					S3: &kerraregv1alpha1.AmazonS3Config{
 						Bucket: bucket,
 					},
 				},
@@ -380,7 +405,7 @@ func getModuleVersions(w http.ResponseWriter, r *http.Request) {
 		logger.Error("unable to get modules", "error", err)
 	}
 
-	var module modulev1alpha1.Module
+	var module kerraregv1alpha1.Module
 	if err = json.Unmarshal(result, &module); err != nil {
 		logger.Error("unable to unmarshal module", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)

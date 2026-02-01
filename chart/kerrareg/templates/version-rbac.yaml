@@ -1,0 +1,54 @@
+{{- if and .Values.version.enabled .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: version-controller-manager-role
+rules:
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - versions
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - versions/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - versions/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: version-controller-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: version-controller-manager-role
+subjects:
+- kind: ServiceAccount
+  name: version-controller-manager
+  namespace: {{ .Values.global.namespace }}
+{{- end }}

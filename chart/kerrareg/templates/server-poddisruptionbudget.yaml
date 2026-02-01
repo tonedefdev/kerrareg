@@ -1,0 +1,12 @@
+{{- if and .Values.server.enabled .Values.server.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: server
+  namespace: {{ .Values.global.namespace }}
+spec:
+  minAvailable: {{ .Values.server.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app: server
+{{- end }}

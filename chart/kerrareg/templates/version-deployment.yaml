@@ -1,0 +1,49 @@
+{{- if .Values.version.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: version-controller-manager
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: version-controller
+    control-plane: controller-manager
+spec:
+  replicas: {{ .Values.version.replicaCount }}
+  selector:
+    matchLabels:
+      app: version-controller
+      control-plane: controller-manager
+  template:
+    metadata:
+      labels:
+        app: version-controller
+        control-plane: controller-manager
+    spec:
+      serviceAccountName: version-controller-manager
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+      - name: manager
+        image: "{{ .Values.version.image.repository }}:{{ .Values.version.image.tag }}"
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        command:
+        - /manager
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+        resources:
+          {{- toYaml .Values.version.resources | nindent 10 }}
+      {{- with .Values.version.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.version.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.version.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

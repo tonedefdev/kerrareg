@@ -37,9 +37,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	depotv1alpha1 "kerrareg/services/depot/api/v1alpha1"
+	kerraregv1alpha1 "kerrareg/api/v1alpha1"
 	"kerrareg/services/depot/internal/controller"
-	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -50,8 +49,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(modulev1alpha1.AddToScheme(scheme))
-	utilruntime.Must(depotv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kerraregv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

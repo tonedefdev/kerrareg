@@ -1,0 +1,24 @@
+apiVersion: kerrareg.io/v1alpha1
+kind: Depot
+metadata:
+  name: my-team-depot
+  namespace: defdevio
+spec:
+  global:
+    githubClientConfig:
+      useAuthenticatedClient: true
+    moduleConfig:
+      fileFormat: zip
+      immutable: true
+    storageConfig:
+      fileSystem:
+        directoryPath: /Users/tonedefdev/Desktop/modules
+  moduleConfigs:
+  - name: terraform-aws-eks
+    provider: aws
+    repoOwner: terraform-aws-modules
+    versionConstraints: ">= 21.10.1, != 21.13.0"
+  - name: terraform-azurerm-aks
+    provider: azurerm
+    repoOwner: azure
+    versionConstraints: ">= 10.0.0"

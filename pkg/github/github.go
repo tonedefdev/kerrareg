@@ -15,13 +15,13 @@ import (
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
+	"github.com/go-logr/logr"
 	"github.com/google/go-github/v81/github"
 	"golang.org/x/oauth2"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kerraregTypes "kerrareg/api/types"
-	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
+	kerraregv1alpha1 "kerrareg/api/v1alpha1"
 )
 
 // jwtTransport is a custom HTTP transport that adds the JWT to the Authorization header.
@@ -59,45 +59,91 @@ func CreateGithubClient(ctx context.Context, useAuthenticatedClient bool, github
 }
 
 // GetModuleArchiveFromRef gets a module from Github based on its ref and returns a byte slice and the file's base64 encoded SHA256 checksum.
-func GetModuleArchiveFromRef(ctx context.Context, githubClient *github.Client, version *versionv1alpha1.Version, format github.ArchiveFormat) (moduleBytes []byte, checksum *string, err error) {
+func GetModuleArchiveFromRef(ctx context.Context, log logr.Logger, githubClient *github.Client, version *kerraregv1alpha1.Version, format github.ArchiveFormat) (moduleBytes []byte, checksum *string, err error) {
 	ref := version.Spec.Version
 	if !strings.HasPrefix(ref, "v") {
 		ref = "v" + ref
 	}
 
-	al, alResp, err := githubClient.Repositories.GetArchiveLink(ctx, version.Spec.ModuleConfigRef.RepoOwner, *version.Spec.ModuleConfigRef.Name, format, &github.RepositoryContentGetOptions{
-		Ref: ref,
-	}, 10)
-	defer alResp.Body.Close()
-
+	var moduleReq *http.Response
+	moduleReq, err = GetArchiveRequest(ctx, githubClient, version, format, ref)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	if al == nil || alResp == nil {
-		return nil, nil, fmt.Errorf("the response from the Github API was nil: %w", err)
-	}
-
-	if alResp.StatusCode != 302 {
-		return nil, nil, fmt.Errorf("failed to get Github archive link: status code %d: %w", alResp.StatusCode, err)
-	}
-
-	moduleReq, err := http.Get(al.String())
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create HTTP request for archive link: %w", err)
-	}
 	defer moduleReq.Body.Close()
+
+	log.V(5).Info("module req status code with 'v' prefix", "statusCode", moduleReq.StatusCode)
+
+	if moduleReq.StatusCode != 200 {
+		// If we get a 404 not found error it may be because the tag is prefixed without a 'v'
+		// so we try again without the 'v' prefix before returning an error.
+		if moduleReq.StatusCode == 404 {
+			var moduleReq *http.Response
+
+			refNoV := strings.TrimPrefix(ref, "v")
+			moduleReq, err = GetArchiveRequest(ctx, githubClient, version, format, refNoV)
+			if err != nil {
+				return nil, nil, err
+			}
+			defer moduleReq.Body.Close()
+
+			log.V(5).Info("module req status code without 'v' prefix", "statusCode", moduleReq.StatusCode)
+
+			moduleBytes, err = io.ReadAll(moduleReq.Body)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to read module archive data: %w", err)
+			}
+
+			log.V(5).Info("module req bytes length", "length", len(moduleBytes))
+
+			sha256Sum := sha256.Sum256(moduleBytes)
+			checksumSha256 := base64.StdEncoding.EncodeToString(sha256Sum[:])
+			checksum = &checksumSha256
+			return
+		}
+
+		return nil, nil, fmt.Errorf("failed to get module archive from Github: status code %d", moduleReq.StatusCode)
+	}
 
 	moduleBytes, err = io.ReadAll(moduleReq.Body)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read module archive data: %w", err)
 	}
 
+	log.V(5).Info("module req bytes length", "length", len(moduleBytes))
+
 	sha256Sum := sha256.Sum256(moduleBytes)
 	checksumSha256 := base64.StdEncoding.EncodeToString(sha256Sum[:])
 	checksum = &checksumSha256
 
 	return
+}
+
+// GetArchiveRequest retrieves the archive link for a given repository and reference (branch, tag, or commit SHA).
+func GetArchiveRequest(ctx context.Context, githubClient *github.Client, version *kerraregv1alpha1.Version, format github.ArchiveFormat, ref string) (*http.Response, error) {
+	al, alResp, err := githubClient.Repositories.GetArchiveLink(ctx, version.Spec.ModuleConfigRef.RepoOwner, *version.Spec.ModuleConfigRef.Name, format, &github.RepositoryContentGetOptions{
+		Ref: ref,
+	}, 10)
+	defer alResp.Body.Close()
+
+	if err != nil {
+		return nil, err
+	}
+
+	if al == nil || alResp == nil {
+		return nil, fmt.Errorf("the response from the Github API was nil: %w", err)
+	}
+
+	if alResp.StatusCode != 302 {
+		return nil, fmt.Errorf("failed to get Github archive link: status code %d: %w", alResp.StatusCode, err)
+	}
+
+	archiveReq, err := http.Get(al.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request for archive link: %w", err)
+	}
+
+	return archiveReq, nil
 }
 
 // GenerateGithubClient creates a GitHub client using a GitHub Application for authentication.
@@ -151,7 +197,7 @@ func GenerateAuthenticatedGithubClient(ctx context.Context, githubClientConfig *
 // The k8sClient parameter should be received by the controller's client.
 func GetGithubApplicationSecret(ctx context.Context, k8sClient client.Client, secretNamespace string) (*GithubClientConfig, error) {
 	object := client.ObjectKey{
-		Name:      kerraregTypes.KerraregGithubSecretName,
+		Name:      kerraregv1alpha1.KerraregGithubSecretName,
 		Namespace: secretNamespace,
 	}
 
@@ -160,19 +206,19 @@ func GetGithubApplicationSecret(ctx context.Context, k8sClient client.Client, se
 		return nil, err
 	}
 
-	appID, err := strconv.ParseInt(string(secret.Data[kerraregTypes.KerraregGithubSecretDataFieldAppID]), 0, 64)
+	appID, err := strconv.ParseInt(string(secret.Data[kerraregv1alpha1.KerraregGithubSecretDataFieldAppID]), 0, 64)
 	if err != nil {
-		return nil, fmt.Errorf("unable to parse '%s' as int64: %w", kerraregTypes.KerraregGithubSecretDataFieldAppID, err)
+		return nil, fmt.Errorf("unable to parse '%s' as int64: %w", kerraregv1alpha1.KerraregGithubSecretDataFieldAppID, err)
 	}
 
-	installID, err := strconv.ParseInt(string(secret.Data[kerraregTypes.KerraregGithubSecretDataFieldInstallID]), 0, 64)
+	installID, err := strconv.ParseInt(string(secret.Data[kerraregv1alpha1.KerraregGithubSecretDataFieldInstallID]), 0, 64)
 	if err != nil {
-		return nil, fmt.Errorf("unable to parse '%s' as int64: %w", kerraregTypes.KerraregGithubSecretDataFieldInstallID, err)
+		return nil, fmt.Errorf("unable to parse '%s' as int64: %w", kerraregv1alpha1.KerraregGithubSecretDataFieldInstallID, err)
 	}
 
-	keyData, err := base64.StdEncoding.DecodeString(string(secret.Data[kerraregTypes.KerraregGithubSecretDataFieldPrivateKey]))
+	keyData, err := base64.StdEncoding.DecodeString(string(secret.Data[kerraregv1alpha1.KerraregGithubSecretDataFieldPrivateKey]))
 	if err != nil {
-		return nil, fmt.Errorf("unable to decode '%s': %w", kerraregTypes.KerraregGithubSecretDataFieldPrivateKey, err)
+		return nil, fmt.Errorf("unable to decode '%s': %w", kerraregv1alpha1.KerraregGithubSecretDataFieldPrivateKey, err)
 	}
 
 	githubClientConfig := &GithubClientConfig{

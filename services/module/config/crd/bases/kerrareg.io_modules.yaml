@@ -109,6 +109,28 @@ spec:
                   storageConfig:
                     description: The external storage configuration settings.
                     properties:
+                      azureStorage:
+                        properties:
+                          accountName:
+                            description: The Azure Storage Account name.
+                            type: string
+                          accountUrl:
+                            description: The Azure Storage Account URL.
+                            type: string
+                          resourceGroup:
+                            description: The Azure Resource Group where the Azure
+                              Storage Account is located.
+                            type: string
+                          subscriptionID:
+                            description: The Azure subscription ID where the Azure
+                              Storage Account is located.
+                            type: string
+                        required:
+                        - accountName
+                        - accountUrl
+                        - resourceGroup
+                        - subscriptionID
+                        type: object
                       fileSystem:
                         description: The configuration settings for storing Versions
                           on a local filesystem.

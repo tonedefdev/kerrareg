@@ -1,0 +1,52 @@
+apiVersion: kerrareg.io/v1alpha1
+kind: Module
+metadata:
+  name: terraform-azurerm-aks
+  namespace: defdevio
+spec:
+  moduleConfig:
+    fileFormat: zip
+    githubClientConfig:
+      useAuthenticatedClient: true
+    immutable: true
+    name: terraform-azurerm-aks
+    provider: azurerm
+    repoOwner: azure
+    storageConfig:
+      fileSystem:
+        directoryPath: /Users/tonedefdev/Desktop/modules
+    versionConstraints: '>= 10.0.0'
+  versions:
+  - version: 11.0.0
+  - version: 10.2.0
+  - version: 10.1.1
+  - version: 10.1.0
+  - version: 10.0.2
+  - version: 10.0.1
+  - version: 10.0.0
+status:
+  latestVersion: v11.0.0
+  moduleVersionRefs:
+    10.0.0:
+      fileName: 019bde7c-ab0e-7b00-9be8-54d7249bfc45.zip
+      name: terraform-azurerm-aks-10.0.0
+    10.0.1:
+      fileName: 019bde7c-ab0a-74ed-b055-7fbc3dfeeaef.zip
+      name: terraform-azurerm-aks-10.0.1
+    10.0.2:
+      fileName: 019bde7c-ab06-781a-862c-b40ae8f52441.zip
+      name: terraform-azurerm-aks-10.0.2
+    10.1.0:
+      fileName: 019bde7c-ab02-7a31-a106-acc6eb4b4728.zip
+      name: terraform-azurerm-aks-10.1.0
+    10.1.1:
+      fileName: 019bde7c-aafd-7e9e-b132-cc9c254fac16.zip
+      name: terraform-azurerm-aks-10.1.1
+    10.2.0:
+      fileName: 019bde7c-aaf9-7651-bd73-b804dd6c2206.zip
+      name: terraform-azurerm-aks-10.2.0
+    11.0.0:
+      fileName: 019bde7c-aaf2-74e5-a446-c0d6a3d172be.zip
+      name: terraform-azurerm-aks-11.0.0
+  syncStatus: Successfully synced module
+  synced: true

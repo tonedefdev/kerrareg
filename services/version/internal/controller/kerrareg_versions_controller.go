@@ -33,12 +33,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kerraregTypes "kerrareg/api/types"
+	kerraregv1alpha1 "kerrareg/api/v1alpha1"
 	kerraregGithub "kerrareg/pkg/github"
 	"kerrareg/pkg/storage"
 	"kerrareg/pkg/storage/types"
-	modulev1alpha1 "kerrareg/services/module/api/v1alpha1"
-	versionv1alpha1 "kerrareg/services/version/api/v1alpha1"
 )
 
 const (
@@ -66,7 +64,7 @@ type KerraregReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	version := &versionv1alpha1.Version{}
+	version := &kerraregv1alpha1.Version{}
 	err := r.Get(ctx, req.NamespacedName, version)
 	if err != nil {
 		if k8serr.IsNotFound(err) {
@@ -89,24 +87,24 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		Namespace: req.Namespace,
 	}
 
-	var module modulev1alpha1.Module
+	var module kerraregv1alpha1.Module
 	if err = r.Get(ctx, moduleObject, &module); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	if version.ObjectMeta.DeletionTimestamp.IsZero() {
-		if !controllerutil.ContainsFinalizer(version, kerraregTypes.KerraregFinalizer) {
+		if !controllerutil.ContainsFinalizer(version, kerraregv1alpha1.KerraregFinalizer) {
 			r.Log.V(5).Info("Adding finalizer",
 				"version", version.Spec.Version,
 				"versionName", version.Name,
 			)
 
-			updated := controllerutil.AddFinalizer(version, kerraregTypes.KerraregFinalizer)
+			updated := controllerutil.AddFinalizer(version, kerraregv1alpha1.KerraregFinalizer)
 			if !updated {
 				return ctrl.Result{}, err
 			}
 
-			var currentVersion versionv1alpha1.Version
+			var currentVersion kerraregv1alpha1.Version
 			if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 				if err := r.Get(ctx, req.NamespacedName, &currentVersion); err != nil {
 					return err
@@ -135,13 +133,13 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	} else {
 		// The object is being deleted
 		r.Log.V(5).Info("Object is being deleted", "version", version.Spec)
-		if controllerutil.ContainsFinalizer(version, kerraregTypes.KerraregFinalizer) {
+		if controllerutil.ContainsFinalizer(version, kerraregv1alpha1.KerraregFinalizer) {
 			filePath, err := getModuleFilePath(version)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 
-			version.Spec.ModuleConfigRef = module.Spec.ModuleConfig
+			version.Spec.ModuleConfigRef = &module.Spec.ModuleConfig
 			soi := &types.StorageObjectInput{
 				Method:   types.Delete,
 				FilePath: filePath,
@@ -152,7 +150,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				return ctrl.Result{}, err
 			}
 
-			controllerutil.RemoveFinalizer(version, kerraregTypes.KerraregFinalizer)
+			controllerutil.RemoveFinalizer(version, kerraregv1alpha1.KerraregFinalizer)
 			if err := r.Update(ctx, version); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -166,9 +164,9 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	switch version.Spec.Type {
-	case kerraregTypes.KerraregModule:
+	case kerraregv1alpha1.KerraregModule:
 		{
-			version.Spec.ModuleConfigRef = module.Spec.ModuleConfig
+			version.Spec.ModuleConfigRef = &module.Spec.ModuleConfig
 			version.Spec.FileName = module.Status.ModuleVersionRefs[version.Spec.Version].FileName
 
 			if module.Spec.ModuleConfig.Name == nil {
@@ -187,7 +185,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	var fileBytes []byte
 	var filePath *string
 
-	if version.Spec.ModuleConfigRef.Name != nil && version.Spec.ProviderConfigRef.Name != nil {
+	if version.Spec.ModuleConfigRef != nil && version.Spec.ProviderConfigRef != nil {
 		version.Status.Synced = false
 		version.Status.SyncStatus = "Only one of 'ModuleConfigRef' or 'ProviderConfigRef' can be provided: Both are defined"
 		err = r.Status().Update(ctx, version)
@@ -230,7 +228,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			fileFormat = github.Tarball
 		}
 
-		moduleBytes, checksum, err := kerraregGithub.GetModuleArchiveFromRef(ctx, githubClient, version, fileFormat)
+		moduleBytes, checksum, err := kerraregGithub.GetModuleArchiveFromRef(ctx, r.Log, githubClient, version, fileFormat)
 		if err != nil {
 			version.Status.SyncStatus = fmt.Sprintf("Failed to retrieve Github archive: %v", err)
 			err = r.Status().Update(ctx, version)
@@ -247,7 +245,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 		// If Module is immutable, the checksum field is non-nil, and the calculated checksum between
 		// the Github archive and the version stored in the resource's status do not match - stop processing, update status, and requeue.
-		if version.Spec.ModuleConfigRef.Immutable && version.Status.Checksum != nil && *version.Status.Checksum != *archiveChecksum {
+		if *version.Spec.ModuleConfigRef.Immutable && version.Status.Checksum != nil && *version.Status.Checksum != *archiveChecksum {
 			statusMsg := fmt.Errorf("Version is marked immutable: archive checksum doesn't match spec: got '%s'", *archiveChecksum)
 			r.Log.Error(statusMsg, "checksum mismatch", "versionName", version.Name, "version", version.Spec.Version)
 
@@ -305,7 +303,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		"versionName", version.Name,
 	)
 
-	var currentVersion versionv1alpha1.Version
+	var currentVersion kerraregv1alpha1.Version
 	if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		if err := r.Get(ctx, req.NamespacedName, &currentVersion); err != nil {
 			return err
@@ -353,7 +351,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	r.Log.Info("Successfully reconciled Version",
+	r.Log.V(5).Info("Successfully reconciled Version",
 		"version", version.Name,
 		"namespace", version.Namespace,
 	)
@@ -364,7 +362,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 // SetupWithManager sets up the controller with the Manager.
 func (r *KerraregReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&versionv1alpha1.Version{}).
+		For(&kerraregv1alpha1.Version{}).
 		Named(kerraregControllerName).
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 1,
@@ -431,7 +429,7 @@ func (r *KerraregReconciler) InitStorageFactory(ctx context.Context, soi *types.
 // getModuleFilePath gets the Version's file path as either the user defined storage path
 // or the Module's name if the relevant storage path field is nil. The function also removes
 // any trailing slashes from the storage path field if it is a non-nil value.
-func getModuleFilePath(version *versionv1alpha1.Version) (*string, error) {
+func getModuleFilePath(version *kerraregv1alpha1.Version) (*string, error) {
 	var filePath string
 	if version.Spec.ModuleConfigRef.StorageConfig.S3 != nil && version.Spec.ModuleConfigRef.StorageConfig.S3.Key != nil {
 		sanitized, err := storage.RemoveTrailingSlash(version.Spec.ModuleConfigRef.StorageConfig.S3.Key)

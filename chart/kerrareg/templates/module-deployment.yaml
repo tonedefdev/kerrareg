@@ -1,0 +1,49 @@
+{{- if .Values.module.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-controller-manager
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: module-controller
+    control-plane: controller-manager
+spec:
+  replicas: {{ .Values.module.replicaCount }}
+  selector:
+    matchLabels:
+      app: module-controller
+      control-plane: controller-manager
+  template:
+    metadata:
+      labels:
+        app: module-controller
+        control-plane: controller-manager
+    spec:
+      serviceAccountName: module-controller-manager
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+      - name: manager
+        image: "{{ .Values.module.image.repository }}:{{ .Values.module.image.tag }}"
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        command:
+        - /manager
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+        resources:
+          {{- toYaml .Values.module.resources | nindent 10 }}
+      {{- with .Values.module.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.module.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.module.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

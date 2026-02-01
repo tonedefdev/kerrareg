@@ -31,4 +31,5 @@ go.work.sum
 # .idea/
 # .vscode/
 
+api/*/bin/
 services/*/bin/
