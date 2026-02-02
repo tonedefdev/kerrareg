@@ -1,7 +1,7 @@
 package types
 
 import (
-	versionv1alpha1 "kerrareg/api/v1alpha1"
+	versionv1alpha1 "github.com/tonedefdev/kerrareg/api/v1alpha1"
 )
 
 //go:generate stringer -type=StorageMethod

@@ -616,7 +616,6 @@ Use environment variables to pass access tokens to OpenTofu. This method is also
 **1. Fetch an access token for the Kubernetes cluster and set the OpenTofu environment variable**:
 
 ```bash
-# One-liner to set token and run Terraform
 export TF_TOKEN_KERRAREG_EXAMPLE_COM=$(aws eks get-token --cluster-name your-eks-cluster-name --region us-west-2 --output json | jq -r '.status.token')
 ```
 
@@ -658,7 +657,10 @@ module "vpc" {
 
 ### Method 2: Base64-Encoded Kubeconfig in Credentials File
 
-Use a credentials file with a base64-encoded kubeconfig for direct authentication. This can be useful for local development workstations and developing Kerrareg itself.
+Use a credentials file with a base64-encoded kubeconfig for direct authentication. This can be useful for local development workstations where a `kind` cluster or local cluster has been deployed, or while developing Kerrareg itself!
+
+> [!NOTE]
+> In order to enable using a kubeconfig you must set the value when deploying the `helm` chart via 
 
 **Setup Steps:**
 

@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
-	storagetypes "kerrareg/pkg/storage/types"
 	"net/http"
 	"strings"
+
+	storagetypes "github.com/tonedefdev/kerrareg/pkg/storage/types"
 
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/googleapi"

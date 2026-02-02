@@ -1,4 +1,4 @@
-module kerrareg/services/server
+module github.com/tonedefdev/kerrareg/services/server
 
 go 1.25.5
 

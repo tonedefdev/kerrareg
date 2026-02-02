@@ -1,4 +1,4 @@
-module kerrareg/pkg/storage
+module github.com/tonedefdev/kerrareg/pkg/storage
 
 go 1.25.5
 

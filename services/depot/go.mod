@@ -1,4 +1,4 @@
-module kerrareg/services/depot
+module github.com/tonedefdev/kerrareg/services/depot
 
 go 1.25.0
 

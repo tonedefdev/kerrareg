@@ -1,4 +1,4 @@
-module kerrareg/services/version
+module github.com/tonedefdev/kerrareg/services/version
 
 go 1.25.0
 

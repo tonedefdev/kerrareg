@@ -33,10 +33,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kerraregv1alpha1 "kerrareg/api/v1alpha1"
-	kerraregGithub "kerrareg/pkg/github"
-	"kerrareg/pkg/storage"
-	"kerrareg/pkg/storage/types"
+	kerraregv1alpha1 "github.com/tonedefdev/kerrareg/api/v1alpha1"
+	kerraregGithub "github.com/tonedefdev/kerrareg/pkg/github"
+	"github.com/tonedefdev/kerrareg/pkg/storage"
+	"github.com/tonedefdev/kerrareg/pkg/storage/types"
 )
 
 const (

@@ -20,9 +20,9 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	kerraregv1alpha1 "kerrareg/api/v1alpha1"
-	"kerrareg/pkg/storage"
-	storageTypes "kerrareg/pkg/storage/types"
+	kerraregv1alpha1 "github.com/tonedefdev/kerrareg/api/v1alpha1"
+	"github.com/tonedefdev/kerrareg/pkg/storage"
+	storageTypes "github.com/tonedefdev/kerrareg/pkg/storage/types"
 )
 
 var (

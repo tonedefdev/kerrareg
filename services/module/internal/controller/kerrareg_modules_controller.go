@@ -38,7 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kerraregv1alpha1 "kerrareg/api/v1alpha1"
+	kerraregv1alpha1 "github.com/tonedefdev/kerrareg/api/v1alpha1"
 )
 
 const (

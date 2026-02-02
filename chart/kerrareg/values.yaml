@@ -4,7 +4,7 @@
 
 ## Global settings
 global:
-  namespace: kerrareg
+  namespace: kerrareg-system
   imagePullPolicy: IfNotPresent
 
 ## Version Service (Core - handles GitHub fetching and storage)
@@ -64,7 +64,7 @@ depot:
 ## Server Service (Registry Protocol API)
 server:
   enabled: true
-  replicaCount: 3
+  replicaCount: 1
   image:
     repository: kerrareg/server
     tag: latest

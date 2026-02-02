@@ -32,7 +32,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	kerraregv1alpha1 "kerrareg/api/v1alpha1"
+	kerraregv1alpha1 "github.com/tonedefdev/kerrareg/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 

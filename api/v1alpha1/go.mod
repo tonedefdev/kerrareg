@@ -1,4 +1,4 @@
-module kerrareg/api/v1alpha1
+module github.com/tonedefdev/kerrareg/api/v1alpha1
 
 go 1.25.5
 

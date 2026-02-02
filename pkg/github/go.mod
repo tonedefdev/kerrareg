@@ -1,4 +1,4 @@
-module kerrareg/pkg/github
+module github.com/tonedefdev/kerrareg/pkg/github
 
 go 1.25.5
 

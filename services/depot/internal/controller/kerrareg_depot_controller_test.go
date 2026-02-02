@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kerraregiov1alpha1 "kerrareg/api/v1alpha1"
+	kerraregiov1alpha1 "github.com/tonedefdev/kerrareg/api/v1alpha1"
 )
 
 var _ = Describe("Depot Controller", func() {

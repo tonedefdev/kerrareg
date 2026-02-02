@@ -32,9 +32,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"kerrareg/api/v1alpha1"
-	kerraregv1alpha1 "kerrareg/api/v1alpha1"
-	kerraregGithub "kerrareg/pkg/github"
+	"github.com/tonedefdev/kerrareg/api/v1alpha1"
+	kerraregv1alpha1 "github.com/tonedefdev/kerrareg/api/v1alpha1"
+	kerraregGithub "github.com/tonedefdev/kerrareg/pkg/github"
 )
 
 // Depot reconciles a Depot object

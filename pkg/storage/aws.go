@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	storagetypes "kerrareg/pkg/storage/types"
+	storagetypes "github.com/tonedefdev/kerrareg/pkg/storage/types"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"

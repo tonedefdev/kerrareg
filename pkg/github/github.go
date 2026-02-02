@@ -21,7 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kerraregv1alpha1 "kerrareg/api/v1alpha1"
+	kerraregv1alpha1 "github.com/tonedefdev/kerrareg/api/v1alpha1"
 )
 
 // jwtTransport is a custom HTTP transport that adds the JWT to the Authorization header.
