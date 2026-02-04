@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- kerrareg.io_v1alpha1_depot.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

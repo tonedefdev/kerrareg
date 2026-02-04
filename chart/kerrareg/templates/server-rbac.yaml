@@ -1,0 +1,35 @@
+{{- if and .Values.server.enabled .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: server-role
+rules:
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - versions
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - modules
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: server-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: server-role
+subjects:
+- kind: ServiceAccount
+  name: server
+  namespace: {{ .Values.global.namespace }}
+{{- end }}

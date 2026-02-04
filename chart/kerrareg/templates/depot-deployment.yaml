@@ -1,0 +1,49 @@
+{{- if .Values.depot.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: depot-controller-manager
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: depot-controller
+    control-plane: controller-manager
+spec:
+  replicas: {{ .Values.depot.replicaCount }}
+  selector:
+    matchLabels:
+      app: depot-controller
+      control-plane: controller-manager
+  template:
+    metadata:
+      labels:
+        app: depot-controller
+        control-plane: controller-manager
+    spec:
+      serviceAccountName: depot-controller-manager
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+      - name: manager
+        image: "{{ .Values.depot.image.repository }}:{{ .Values.depot.image.tag }}"
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        command:
+        - /manager
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+        resources:
+          {{- toYaml .Values.depot.resources | nindent 10 }}
+      {{- with .Values.depot.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.depot.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.depot.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

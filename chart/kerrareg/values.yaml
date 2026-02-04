@@ -1,0 +1,120 @@
+##
+## Kerrareg Helm Chart Values
+##
+
+## Global settings
+global:
+  namespace: kerrareg-system
+  imagePullPolicy: IfNotPresent
+
+## Version Service (Core - handles GitHub fetching and storage)
+version:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: kerrareg/version
+    tag: latest
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+## Module Service (Orchestrates version creation and management)
+module:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: kerrareg/module
+    tag: latest
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+## Depot Service (Optional - pulls modules based on version constraints)
+depot:
+  enabled: false  # Set to true to enable the Depot controller
+  replicaCount: 1
+  image:
+    repository: kerrareg/depot
+    tag: latest
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+## Server Service (Registry Protocol API)
+server:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: kerrareg/server
+    tag: latest
+  service:
+    type: LoadBalancer
+    port: 443
+    targetPort: 8443
+  ingress:
+    enabled: false
+    className: nginx
+    annotations: {}
+    hosts:
+      - host: kerrareg.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+  tls:
+    # Set to true if using TLS certificates (volumes must be configured separately)
+    enabled: false
+    certPath: /etc/tls/tls.crt
+    keyPath: /etc/tls/tls.key
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Pod Disruption Budget
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 2
+
+## Service Account configuration
+serviceAccount:
+  # Automatically create service accounts for each controller
+  create: true
+  # Annotations to add to the service accounts
+  annotations: {}
+
+## RBAC configuration
+rbac:
+  # Create RBAC roles and role bindings
+  create: true
+
+## Custom Resource Definitions
+crd:
+  # Install CRDs as part of the chart
+  install: true

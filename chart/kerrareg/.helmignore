@@ -1,0 +1,26 @@
+# Helm Ignore patterns
+# Helm will not include files matching these patterns when packaging
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Helm
+Chart.lock
+/charts/
+
+# Documentation
+*.md
+examples/
+
+# Build artifacts
+*.tar.gz
