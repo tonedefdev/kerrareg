@@ -24,11 +24,11 @@ jobs:
     strategy:
       matrix:
         service:
-          - name: version
+          - name: version-controller
             path: services/version
-          - name: module
+          - name: module-controller
             path: services/module
-          - name: depot
+          - name: depot-controller
             path: services/depot
           - name: server
             path: services/server
@@ -73,6 +73,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   build-status:
+    name: Build Status
     runs-on: ubuntu-latest
     needs: build
     if: always()
