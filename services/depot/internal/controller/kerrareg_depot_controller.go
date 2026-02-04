@@ -32,7 +32,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/tonedefdev/kerrareg/api/v1alpha1"
 	kerraregv1alpha1 "github.com/tonedefdev/kerrareg/api/v1alpha1"
 	kerraregGithub "github.com/tonedefdev/kerrareg/pkg/github"
 )
@@ -53,7 +52,7 @@ type DepotReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var depot v1alpha1.Depot
+	var depot kerraregv1alpha1.Depot
 	err := r.Get(ctx, req.NamespacedName, &depot)
 	if err != nil {
 		if errors.IsNotFound(err) {
