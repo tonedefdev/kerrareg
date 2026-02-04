@@ -25,7 +25,7 @@ spec:
       type: string
     - description: The source repository URL of the module
       jsonPath: .spec.moduleConfig.repoUrl
-      name: RepoURL
+      name: Source
       type: string
     - description: The configuration for module storage
       jsonPath: .spec.moduleConfig.storageConfig
@@ -139,6 +139,16 @@ spec:
                             description: The directory path on the file system where
                               the Version will be stored.
                             type: string
+                        type: object
+                      gcs:
+                        description: The configuration settings for storing Versions
+                          in a Google Cloud Storage bucket.
+                        properties:
+                          bucket:
+                            description: The GCS bucket name.
+                            type: string
+                        required:
+                        - bucket
                         type: object
                       s3:
                         description: The configuration settings for storing Versions
