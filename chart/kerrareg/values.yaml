@@ -13,7 +13,7 @@ version:
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/kerrareg/version-controller
-    tag: latest
+    tag: main-4939830
   resources:
     requests:
       cpu: 100m
@@ -31,7 +31,7 @@ module:
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/kerrareg/module-controller
-    tag: latest
+    tag: main-4939830
   resources:
     requests:
       cpu: 100m
@@ -49,7 +49,7 @@ depot:
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/kerrareg/depot-controller
-    tag: latest
+    tag: main-4939830
   resources:
     requests:
       cpu: 100m
@@ -67,7 +67,7 @@ server:
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/kerrareg/server
-    tag: latest
+    tag: main-4939830
   service:
     type: LoadBalancer
     port: 443

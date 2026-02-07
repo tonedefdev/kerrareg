@@ -32,8 +32,11 @@ jobs:
             path: services/depot
           - name: server
             path: services/server
+        platform:
+          - linux/amd64
+          - linux/arm64
     
-    name: Build ${{ matrix.service.name }}
+    name: Build ${{ matrix.service.name }} (${{ matrix.platform }})
     
     steps:
       - name: Checkout code
@@ -66,6 +69,7 @@ jobs:
         with:
           context: ${{ matrix.service.path }}
           file: ${{ matrix.service.path }}/Dockerfile
+          platforms: ${{ matrix.platform }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
