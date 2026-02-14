@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.arch == 'amd64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     strategy:
       matrix:
         service:
@@ -32,11 +32,11 @@ jobs:
             path: services/depot
           - name: server
             path: services/server
-        platform:
-          - linux/amd64
-          - linux/arm64
+        arch:
+          - amd64
+          - arm64
     
-    name: Build ${{ matrix.service.name }} (${{ matrix.platform }})
+    name: Build ${{ matrix.service.name }} (${{ matrix.arch }})
     
     steps:
       - name: Checkout code
@@ -69,7 +69,7 @@ jobs:
         with:
           context: ${{ matrix.service.path }}
           file: ${{ matrix.service.path }}/Dockerfile
-          platforms: ${{ matrix.platform }}
+          platforms: linux/${{ matrix.arch }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
