@@ -5,7 +5,7 @@ go 1.25.5
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
 	github.com/go-chi/chi/v5 v5.2.3
-	github.com/tonedefdev/kerrareg/api/v1alpha1 v0.0.0-20260204044222-70ab09438161
+	github.com/tonedefdev/kerrareg/api/v1alpha1 v0.0.0-20260214165229-59ed26a15d6f
 	github.com/tonedefdev/kerrareg/pkg/storage v0.0.0-20260204044222-70ab09438161
 	k8s.io/client-go v0.35.0
 )
@@ -109,8 +109,8 @@ require (
 	k8s.io/api v0.35.0 // indirect
 	k8s.io/apimachinery v0.35.0 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
-	k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912 // indirect
-	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4 // indirect
+	k8s.io/kube-openapi v0.0.0-20260127142750-a19766b6e2d4 // indirect
+	k8s.io/utils v0.0.0-20260108192941-914a6e750570 // indirect
 	sigs.k8s.io/controller-runtime v0.23.1 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
