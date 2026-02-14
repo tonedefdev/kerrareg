@@ -171,6 +171,10 @@ spec:
                           '1.2.1' or '>= 1.0.0, < 2.0.0' or '~> 1.0.0, != 1.0.2'. This field is only
                           respected by the Depot controller.
                         type: string
+                      versionHistoryLimit:
+                        description: The number of versions to keep stored in the
+                          registry at any given time.
+                        type: integer
                     type: object
                   storageConfig:
                     description: StorageConfig holds details about how to store a
@@ -241,6 +245,8 @@ spec:
                 - storageConfig
                 type: object
               moduleConfigs:
+                description: The module configuration and version details for each
+                  module that should be managed by the Depot controller.
                 items:
                   description: |-
                     ModuleConfig is the configuration settings for the Module and for each
@@ -355,8 +361,17 @@ spec:
                         '1.2.1' or '>= 1.0.0, < 2.0.0' or '~> 1.0.0, != 1.0.2'. This field is only
                         respected by the Depot controller.
                       type: string
+                    versionHistoryLimit:
+                      description: The number of versions to keep stored in the registry
+                        at any given time.
+                      type: integer
                   type: object
                 type: array
+              pollingIntervalMinutes:
+                description: |-
+                  The polling interval in minutes for how often the Depot controller should check for new versions of the modules it manages.
+                  If not specified, the default is 0.
+                type: integer
             required:
             - moduleConfigs
             type: object

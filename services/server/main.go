@@ -54,7 +54,10 @@ func main() {
 	if *kerraregCertPath != "" && *kerraregCertKey != "" {
 		http.ListenAndServeTLS("", *kerraregCertPath, *kerraregCertKey, r)
 	} else {
-		http.ListenAndServe("", r)
+		logger.Info("Server started and listening on default port: 8080 without TLS. For secure communication, provide paths to TLS certificate and key using --tls-cert-path and --tls-cert-key flags.")
+		if err := http.ListenAndServe("localhost:8080", r); err != nil {
+			logger.Error("Failed to start server", "error", err)
+		}
 	}
 
 }

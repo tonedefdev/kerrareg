@@ -22,7 +22,7 @@ spec:
         runAsUser: 65532
       containers:
       - name: server
-        image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+        image: "{{ .Values.server.image.repository }}:{{ .Values.global.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         ports:
         - name: https

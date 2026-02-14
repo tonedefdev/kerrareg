@@ -26,10 +26,15 @@ const (
 type DepotSpec struct {
 	// The configuration that should be applied to all modules that are part
 	// of this Depot.
-	GlobalConfig  *GlobalConfig  `json:"global,omitempty"`
+	GlobalConfig *GlobalConfig `json:"global,omitempty"`
+	// The module configuration and version details for each module that should be managed by the Depot controller.
 	ModuleConfigs []ModuleConfig `json:"moduleConfigs"`
+	// The polling interval in minutes for how often the Depot controller should check for new versions of the modules it manages.
+	// If not specified, the default is 0.
+	PollingIntervalMinutes *int `json:"pollingIntervalMinutes,omitempty"`
 }
 
+// Defines the desired config of all Kerrareg modules managed by the Depot controller.
 type GlobalConfig struct {
 	GithubClientConfig *GithubClientConfig `json:"githubClientConfig,omitempty"`
 	ModuleConfig       *ModuleConfig       `json:"moduleConfig,omitempty"`
@@ -89,6 +94,8 @@ type ModuleConfig struct {
 	// '1.2.1' or '>= 1.0.0, < 2.0.0' or '~> 1.0.0, != 1.0.2'. This field is only
 	// respected by the Depot controller.
 	VersionConstraints string `json:"versionConstraints,omitempty"`
+	// The number of versions to keep stored in the registry at any given time.
+	VersionHistoryLimit *int `json:"versionHistoryLimit,omitempty"`
 }
 
 type GithubClientConfig struct {

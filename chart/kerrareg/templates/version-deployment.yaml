@@ -25,10 +25,8 @@ spec:
         runAsUser: 65532
       containers:
       - name: manager
-        image: "{{ .Values.version.image.repository }}:{{ .Values.version.image.tag }}"
+        image: "{{ .Values.version.image.repository }}:{{ .Values.global.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
-        command:
-        - /manager
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
