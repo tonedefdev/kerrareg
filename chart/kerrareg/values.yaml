@@ -6,6 +6,8 @@
 global:
   namespace: kerrareg-system
   imagePullPolicy: IfNotPresent
+  image:
+    tag: main-8e33ae7  # Override the image tag for all controllers
 
 ## Version Service (Core - handles GitHub fetching and storage)
 version:
@@ -13,7 +15,6 @@ version:
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/kerrareg/version-controller
-    tag: main-4939830
   resources:
     requests:
       cpu: 100m
@@ -31,7 +32,6 @@ module:
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/kerrareg/module-controller
-    tag: main-4939830
   resources:
     requests:
       cpu: 100m
@@ -45,11 +45,10 @@ module:
 
 ## Depot Service (Optional - pulls modules based on version constraints)
 depot:
-  enabled: false  # Set to true to enable the Depot controller
+  enabled: true  # Set to true to enable the Depot controller
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/kerrareg/depot-controller
-    tag: main-4939830
   resources:
     requests:
       cpu: 100m
@@ -67,7 +66,6 @@ server:
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/kerrareg/server
-    tag: main-4939830
   service:
     type: LoadBalancer
     port: 443

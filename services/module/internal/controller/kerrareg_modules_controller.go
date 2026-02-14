@@ -230,6 +230,18 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, fmt.Errorf("latestVersion is nil: %v", module.Spec)
 	}
 
+	if module.Spec.ModuleConfig.VersionHistoryLimit != nil {
+		versions := versionsToKeep(*module)
+		moduleVersionsToKeep := make([]kerraregv1alpha1.ModuleVersion, len(versions))
+		for _, version := range versions {
+			moduleVersion := kerraregv1alpha1.ModuleVersion{
+				Version: version,
+			}
+			moduleVersionsToKeep = append(moduleVersionsToKeep, moduleVersion)
+		}
+		module.Spec.Versions = moduleVersionsToKeep
+	}
+
 	// If ForceSync is true set it to false
 	// now that we have successfully reconciled
 	var currentModule kerraregv1alpha1.Module
@@ -380,6 +392,28 @@ func getLatestVersion(module kerraregv1alpha1.Module) *string {
 	semver.Sort(versions)
 	latestVersion := versions[len(versions)-1]
 	return &latestVersion
+}
+
+func versionsToKeep(module kerraregv1alpha1.Module) []string {
+	versionHistoryLimit := *module.Spec.ModuleConfig.VersionHistoryLimit
+	if module.Spec.ModuleConfig.VersionHistoryLimit == nil || versionHistoryLimit <= 0 {
+		return nil
+	}
+
+	versions := make([]string, len(module.Spec.Versions))
+	for _, version := range module.Spec.Versions {
+		var semverString string
+		if version.Version[0] != 'v' {
+			semverString = fmt.Sprintf("v%s", version.Version)
+		} else {
+			semverString = version.Version
+		}
+		semverString = semver.Canonical(semverString)
+		versions = append(versions, semverString)
+	}
+
+	semver.Sort(versions)
+	return versions[len(versions)-versionHistoryLimit:]
 }
 
 // getModuleName returns the module name as the Module resource's name if

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/google/go-github/v81/github"
@@ -220,6 +221,10 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			}
 
 		}
+	}
+
+	if depot.Spec.PollingIntervalMinutes != nil {
+		return ctrl.Result{RequeueAfter: time.Duration(*depot.Spec.PollingIntervalMinutes) * time.Minute}, nil
 	}
 
 	return ctrl.Result{}, nil

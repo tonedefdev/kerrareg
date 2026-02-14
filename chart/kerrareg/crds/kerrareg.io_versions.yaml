@@ -179,6 +179,10 @@ spec:
                       '1.2.1' or '>= 1.0.0, < 2.0.0' or '~> 1.0.0, != 1.0.2'. This field is only
                       respected by the Depot controller.
                     type: string
+                  versionHistoryLimit:
+                    description: The number of versions to keep stored in the registry
+                      at any given time.
+                    type: integer
                 type: object
               providerConfigRef:
                 description: The reference to the Provider resource's config.
