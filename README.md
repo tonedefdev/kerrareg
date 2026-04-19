@@ -20,6 +20,7 @@ Compatible with **OpenTofu** (all versions) and **Terraform** (v1.2+).
 - [Services](#services)
 - [Storage Backends](#storage-backends)
 - [Getting Started](#getting-started)
+- [Local Testing with kind](#local-testing-with-kind)
 - [Configuration](#configuration)
 - [Usage](#usage)
 - [Migrating to Kerrareg](#migrating-to-kerrareg)
@@ -507,6 +508,274 @@ make deploy
 | `KIND_CLUSTER` | `kind` | Name of the kind cluster |
 | `TAG` | `dev` | Image tag for all services |
 | `REGISTRY` | `ghcr.io/tonedefdev/kerrareg` | Container registry prefix |
+
+## Local Testing with kind
+
+The fastest way to try Kerrareg is with a local [kind](https://kind.sigs.k8s.io/) cluster using the filesystem storage backend and `hostPath`. This avoids any cloud provider setup — no S3 bucket, no Azure Storage Account, no credentials. You'll have a fully functional registry in minutes.
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/)
+- [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- [Helm 3](https://helm.sh/docs/intro/install/)
+- [cloud-provider-kind](https://github.com/kubernetes-sigs/cloud-provider-kind) (for LoadBalancer support)
+- [OpenTofu](https://opentofu.org/docs/intro/install/) or [Terraform](https://developer.hashicorp.com/terraform/install)
+
+### Step 1: Create the Cluster
+
+```bash
+kind create cluster --name kerrareg
+```
+
+### Step 2: Install Istio (Ingress)
+
+Kerrareg works with any Kubernetes ingress controller — NGINX, Traefik, Contour, HAProxy, or the built-in Gateway API. This guide uses [Istio](https://istio.io/) because it provides automatic mTLS between services, fine-grained traffic policies, and TLS termination at the gateway — giving you defense-in-depth even for local testing. If you prefer a different ingress controller, set `server.ingress.istio.enabled: false` in your Helm values and configure a standard [Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) instead.
+
+Add the Istio Helm repo and install:
+
+```bash
+helm repo add istio https://istio-release.storage.googleapis.com/charts
+helm repo update
+
+helm install istio-base istio/base -n istio-system --create-namespace --wait
+helm install istiod istio/istiod -n istio-system --wait
+
+kubectl create namespace istio-ingress
+helm install istio-ingress istio/gateway -n istio-ingress --wait
+```
+
+### Step 3: Configure TLS and the Gateway
+
+OpenTofu and Terraform **require** HTTPS when communicating with module registries — there is no way to bypass this. You must generate a TLS certificate for your registry hostname.
+
+For local testing, create a self-signed certificate with `openssl`:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout tls.key -out tls.crt \
+  -days 365 \
+  -subj "/CN=kerrareg.defdev.io" \
+  -addext "subjectAltName=DNS:kerrareg.defdev.io"
+```
+
+Create the Kubernetes Secret in the `istio-ingress` namespace (where the gateway reads it):
+
+```bash
+kubectl create secret tls istio-ingress-gateway-certs \
+  -n istio-ingress \
+  --cert=tls.crt \
+  --key=tls.key
+```
+
+Then trust the certificate on your machine so OpenTofu/Terraform accepts it:
+
+**macOS:**
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain tls.crt
+```
+
+**Linux:**
+
+```bash
+sudo cp tls.crt /usr/local/share/ca-certificates/kerrareg.crt
+sudo update-ca-certificates
+```
+
+Apply the Istio Gateway resource:
+
+```bash
+kubectl apply -f chart/kerrareg/gateway.yaml
+```
+
+Add a `/etc/hosts` entry so the hostname resolves locally (you'll update the IP in Step 6):
+
+```bash
+echo "127.0.0.1 kerrareg.defdev.io" | sudo tee -a /etc/hosts
+```
+
+### Step 4: Build and Load Images
+
+Build all container images and load them into the kind cluster:
+
+```bash
+make deploy
+```
+
+> **Apple Silicon users:** The default `PLATFORM` is `linux/arm64`. For Intel Macs or Linux, run `make deploy PLATFORM=linux/amd64`.
+
+### Step 5: Install with Helm
+
+Deploy Kerrareg with filesystem storage using `hostPath`, anonymous auth enabled (no credentials needed for testing), and the Istio ingress route:
+
+```bash
+helm upgrade --install kerrareg chart/kerrareg \
+  -n kerrareg-system --create-namespace \
+  --set storage.filesystem.enabled=true \
+  --set storage.filesystem.hostPath=/tmp/kerrareg-modules \
+  --set server.anonymousAuth=true \
+  --set server.useBearerToken=false \
+  --wait
+```
+
+Verify all pods are running:
+
+```bash
+kubectl get pods -n kerrareg-system
+```
+
+### Step 6: Expose the Gateway
+
+kind doesn't natively support `LoadBalancer` services. Use [cloud-provider-kind](https://github.com/kubernetes-sigs/cloud-provider-kind) to assign an external IP:
+
+```bash
+sudo cloud-provider-kind &
+```
+
+Wait a few seconds, then find the external IP:
+
+```bash
+kubectl get svc -n istio-ingress
+```
+
+Update your `/etc/hosts` entry if the IP isn't `127.0.0.1`:
+
+```bash
+# Replace <EXTERNAL-IP> with the actual IP from the command above
+sudo sed -i '' "s/.*kerrareg.defdev.io/<EXTERNAL-IP> kerrareg.defdev.io/" /etc/hosts
+```
+
+### Step 7: Apply CRDs and Create a Test Module
+
+Install the CRDs and create a `Module` resource that pulls a public module from GitHub using filesystem storage:
+
+```bash
+kubectl apply -f chart/kerrareg/crds/
+```
+
+```yaml
+cat <<EOF | kubectl apply -f -
+apiVersion: kerrareg.io/v1alpha1
+kind: Module
+metadata:
+  name: terraform-aws-eks
+  namespace: kerrareg-system
+spec:
+  moduleConfig:
+    name: terraform-aws-eks
+    provider: aws
+    repoOwner: terraform-aws-modules
+    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-eks
+    fileFormat: tar
+    storageConfig:
+      fileSystem:
+        directoryPath: /data/modules
+  versions:
+    - version: "21.10.1"
+EOF
+```
+
+Watch the Version resource sync:
+
+```bash
+kubectl get versions.kerrareg.io -n kerrareg-system -w
+```
+
+Once the status shows `Synced`, the module archive has been fetched from GitHub and stored on the local filesystem.
+
+### Step 8: Use the Registry with OpenTofu
+
+Create a test configuration:
+
+```hcl
+# main.tf
+module "eks" {
+  source  = "kerrareg.defdev.io/kerrareg-system/terraform-aws-eks/aws"
+  version = "21.10.1"
+}
+```
+
+Since `anonymousAuth` is enabled, no credentials are needed. If you trusted the self-signed certificate in Step 3, just run:
+
+```bash
+tofu init -backend=false
+```
+
+You should see OpenTofu download the module from your local Kerrareg instance.
+
+### Step 9: (Optional) Test with Authentication
+
+To test Kerrareg's Kubernetes-native auth, redeploy with `anonymousAuth` disabled and bearer token auth enabled:
+
+```bash
+helm upgrade kerrareg chart/kerrareg \
+  -n kerrareg-system \
+  --set storage.filesystem.enabled=true \
+  --set storage.filesystem.hostPath=/tmp/kerrareg-modules \
+  --set server.anonymousAuth=false \
+  --set server.useBearerToken=true \
+  --wait
+```
+
+Create a ServiceAccount and bind it to a read-only role:
+
+```bash
+kubectl create serviceaccount test-user -n kerrareg-system
+
+kubectl create role kerrareg-reader -n kerrareg-system \
+  --resource=modules.kerrareg.io,versions.kerrareg.io \
+  --verb=get,list,watch
+
+kubectl create rolebinding test-user-reader -n kerrareg-system \
+  --role=kerrareg-reader \
+  --serviceaccount=kerrareg-system:test-user
+```
+
+Generate a short-lived token and set it as the registry credential:
+
+```bash
+export TF_TOKEN_KERRAREG_DEFDEV_IO=$(kubectl create token test-user -n kerrareg-system)
+tofu init -backend=false
+```
+
+OpenTofu sends the bearer token to Kerrareg, which forwards it to the Kubernetes API for authentication and RBAC authorization. This is the same flow used in production — no separate user database or API keys required.
+
+### Step 10: (Optional) Test with a Depot
+
+To test automatic version discovery from GitHub:
+
+```yaml
+cat <<EOF | kubectl apply -f -
+apiVersion: kerrareg.io/v1alpha1
+kind: Depot
+metadata:
+  name: test-depot
+  namespace: kerrareg-system
+spec:
+  global:
+    moduleConfig:
+      fileFormat: tar
+    storageConfig:
+      fileSystem:
+        directoryPath: /data/modules
+  moduleConfigs:
+    - name: terraform-aws-eks
+      provider: aws
+      repoOwner: terraform-aws-modules
+      versionConstraints: ">= 21.10.0, < 21.12.0"
+EOF
+```
+
+The Depot controller queries GitHub releases, creates `Module` resources for matching versions, and the pipeline syncs them to local storage automatically.
+
+### Cleanup
+
+```bash
+kind delete cluster --name kerrareg
+sudo sed -i '' '/kerrareg.defdev.io/d' /etc/hosts
+```
 
 ## Configuration
 
