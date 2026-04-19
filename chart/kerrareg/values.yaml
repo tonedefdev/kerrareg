@@ -7,7 +7,7 @@ global:
   namespace: kerrareg-system
   imagePullPolicy: IfNotPresent
   image:
-    tag: main-702bc1c # Override the image tag for all controllers
+    tag: latest
 
 ## Version Service (Core - handles GitHub fetching and storage)
 version:
