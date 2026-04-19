@@ -14,6 +14,7 @@ Compatible with **OpenTofu** (all versions) and **Terraform** (v1.2+).
 
 ## Table of Contents
 
+- [Why Kerrareg?](#why-kerrareg)
 - [How It Works](#how-it-works)
 - [Architecture](#architecture)
 - [Services](#services)
@@ -28,6 +29,52 @@ Compatible with **OpenTofu** (all versions) and **Terraform** (v1.2+).
 - [Version Constraints](#version-constraints)
 - [Project Structure](#project-structure)
 - [License](#license)
+
+## Why Kerrareg?
+
+There are several open-source Terraform/OpenTofu module registries — [Terrareg](https://github.com/MatthewJohn/terrareg), [Tapir](https://github.com/PacoVK/tapir), [Citizen](https://github.com/outsideris/citizen), and others. They're good projects, but they all share a common challenge: **authentication and authorization are bolted on**. Most require you to stand up a separate database, configure API keys or OAuth flows, and manage user accounts outside of your infrastructure platform.
+
+Kerrareg takes a fundamentally different approach. Instead of reinventing auth, it delegates entirely to Kubernetes — the platform you're already running.
+
+### Security First
+
+| Capability | Kerrareg | Traditional Registries |
+|-----------|----------|------------------------|
+| **Authentication** | Kubernetes bearer tokens or kubeconfig — no proprietary tokens, no user database | API keys, OAuth, or basic auth requiring a separate identity store |
+| **Authorization** | Kubernetes RBAC — namespace-scoped roles control who can read, publish, or admin modules | Custom permission models, often coarse-grained or application-level only |
+| **Token Lifecycle** | Short-lived, auto-rotating tokens via `aws eks get-token`, `gcloud auth`, or `az account get-access-token` | Long-lived API keys that must be manually rotated |
+| **Audit Trail** | Kubernetes audit logs capture every API call with user identity, verb, and resource | Varies — often requires additional logging configuration |
+| **Zero Additional Infrastructure** | No database, no Redis, no external IdP integration | Typically requires PostgreSQL, MySQL, or SQLite plus session management |
+
+Because Kerrareg uses Kubernetes ServiceAccounts and RBAC natively, your existing identity federation (IRSA on EKS, Workload Identity on GKE/AKS, or any OIDC provider) works out of the box. There's nothing extra to configure — if a user or CI pipeline can authenticate to your cluster, they can authenticate to Kerrareg.
+
+### Desired State Reconciliation
+
+Traditional registries are imperative: you push a module version via an API call, and the registry stores it. If something goes wrong — a failed upload, a corrupted archive, a storage outage — you have to detect and remediate it yourself.
+
+Kerrareg is **declarative**. You describe the modules and versions you want, and Kubernetes controllers continuously reconcile toward that desired state:
+
+- **Self-healing:** If a Version resource fails to sync, the controller retries with exponential backoff. Transient GitHub or storage errors resolve automatically.
+- **Idempotent:** Applying the same Module manifest twice is a no-op. Controllers only act on drift.
+- **Garbage collection:** Remove a version from `spec.versions` and the controller cleans up the Version resource and its storage artifact.
+- **Immutability enforcement:** When `immutable: true` is set, the controller validates checksums on every reconciliation — not just at upload time.
+
+This is the same operational model that makes Kubernetes itself reliable, applied to your module registry.
+
+### How Kerrareg Compares
+
+| Feature | Kerrareg | Terrareg | Tapir |
+|---------|----------|----------|-------|
+| Auth mechanism | Kubernetes RBAC + bearer tokens | API keys + SAML/OpenID Connect | API keys |
+| Database required | No (Kubernetes API is the datastore) | Yes (PostgreSQL/MySQL/SQLite) | Yes (MongoDB/PostgreSQL) |
+| Deployment model | Helm chart, runs on any Kubernetes cluster | Docker Compose or standalone | Docker Compose or standalone |
+| Self-healing | Yes (controller reconciliation loop) | No | No |
+| Multi-cloud storage | S3, Azure Blob, GCS, Filesystem | S3, Filesystem | S3, GCS, Filesystem |
+| Version discovery | Automatic via Depot (GitHub Releases API) | Manual upload or API push | Manual upload or API push |
+| Immutability enforcement | Checksum validated every reconciliation | At upload time only | At upload time only |
+| Air-gapped support | Yes (filesystem backend + PVC) | Yes (filesystem) | Limited |
+
+> **In short:** If you're already running Kubernetes, Kerrareg gives you a module registry where security, auth, and operations come free — no extra infrastructure, no extra accounts, no extra attack surface.
 
 ## How It Works
 
