@@ -1,0 +1,17 @@
+{{- if and .Values.storage.filesystem.enabled (not .Values.storage.filesystem.hostPath) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kerrareg-modules
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/name: kerrareg
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: {{ .Values.storage.filesystem.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.filesystem.size }}
+{{- end }}

@@ -151,13 +151,11 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			var currentModuleVersion kerraregv1alpha1.Version
 			if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 				if err = r.Get(ctx, object, &currentModuleVersion); err != nil {
-					return err
-				}
-
-				// There are instances where the module Version has been created already
-				// so this will catch the current Version's resource version and if it's
-				// not an empty string return
-				if currentModuleVersion.ObjectMeta.ResourceVersion != "" {
+					if !errors.IsNotFound(err) {
+						return err
+					}
+				} else if currentModuleVersion.ObjectMeta.ResourceVersion != "" {
+					// The module Version has been created already
 					return nil
 				}
 
@@ -232,7 +230,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	if module.Spec.ModuleConfig.VersionHistoryLimit != nil {
 		versions := versionsToKeep(*module)
-		moduleVersionsToKeep := make([]kerraregv1alpha1.ModuleVersion, len(versions))
+		moduleVersionsToKeep := make([]kerraregv1alpha1.ModuleVersion, 0, len(versions))
 		for _, version := range versions {
 			moduleVersion := kerraregv1alpha1.ModuleVersion{
 				Version: version,
@@ -246,13 +244,12 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// now that we have successfully reconciled
 	var currentModule kerraregv1alpha1.Module
 	if module.Spec.ForceSync {
-		currentModule.Spec.ForceSync = false
-
 		if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 			if err = r.Get(ctx, req.NamespacedName, &currentModule); err != nil {
 				return err
 			}
 
+			currentModule.Spec.ForceSync = false
 			if err = r.Update(ctx, &currentModule, &client.UpdateOptions{
 				FieldManager: kerraregControllerName,
 			}); err != nil {
@@ -377,7 +374,7 @@ func generateFileName(module *kerraregv1alpha1.Module) (*string, error) {
 
 // getLatestVersion returns the latest semantic version of a Module
 func getLatestVersion(module kerraregv1alpha1.Module) *string {
-	versions := make([]string, len(module.Spec.Versions))
+	versions := make([]string, 0, len(module.Spec.Versions))
 	for _, version := range module.Spec.Versions {
 		var semverString string
 		if version.Version[0] != 'v' {
@@ -395,12 +392,12 @@ func getLatestVersion(module kerraregv1alpha1.Module) *string {
 }
 
 func versionsToKeep(module kerraregv1alpha1.Module) []string {
-	versionHistoryLimit := *module.Spec.ModuleConfig.VersionHistoryLimit
-	if module.Spec.ModuleConfig.VersionHistoryLimit == nil || versionHistoryLimit <= 0 {
+	if module.Spec.ModuleConfig.VersionHistoryLimit == nil || *module.Spec.ModuleConfig.VersionHistoryLimit <= 0 {
 		return nil
 	}
+	versionHistoryLimit := *module.Spec.ModuleConfig.VersionHistoryLimit
 
-	versions := make([]string, len(module.Spec.Versions))
+	versions := make([]string, 0, len(module.Spec.Versions))
 	for _, version := range module.Spec.Versions {
 		var semverString string
 		if version.Version[0] != 'v' {
@@ -422,9 +419,9 @@ func getModuleName(module *kerraregv1alpha1.Module) *string {
 	var moduleName string
 	if module.Spec.ModuleConfig.Name != nil {
 		moduleName = *module.Spec.ModuleConfig.Name
+	} else {
+		moduleName = module.Name
 	}
-
-	moduleName = module.Name
 	return &moduleName
 }
 

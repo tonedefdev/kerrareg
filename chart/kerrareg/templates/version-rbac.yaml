@@ -7,6 +7,22 @@ rules:
 - apiGroups:
   - kerrareg.io
   resources:
+  - modules
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - modules/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - kerrareg.io
+  resources:
   - versions
   verbs:
   - create

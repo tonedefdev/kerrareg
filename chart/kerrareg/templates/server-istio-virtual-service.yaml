@@ -10,7 +10,7 @@ spec:
   - {{ . | quote }}
   {{- end }}
   gateways:
-  - istio-ingress/istio-ingress-gateway
+  - {{ .Values.server.ingress.istio.gateway }}
   http:
   - name: kerrareg-server
     route:

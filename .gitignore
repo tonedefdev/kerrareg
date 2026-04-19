@@ -33,4 +33,6 @@ go.work.sum
 
 api/*/bin/
 services/*/bin/
+server
 chart/kerrareg/tls-secret.yaml
+.DS_Store

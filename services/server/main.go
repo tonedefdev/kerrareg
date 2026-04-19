@@ -27,6 +27,7 @@ import (
 
 var (
 	logger                 *slog.Logger
+	kerraregAnonymousAuth  *bool
 	kerraregUseBearerToken *bool
 )
 
@@ -36,6 +37,7 @@ func init() {
 }
 
 func main() {
+	kerraregAnonymousAuth = flag.Bool("anonymous-auth", false, "when true use the server's service account to serve modules and versions without requiring client authentication")
 	kerraregUseBearerToken = flag.Bool("use-bearer-token", false, "when true use a bearer token instead of a base64 encoded kubeconfig to authenticate with the kubernetes API server")
 	kerraregCertPath := flag.String("tls-cert-path", "", "path to TLS certificate file for HTTPS server")
 	kerraregCertKey := flag.String("tls-cert-key", "", "path to TLS certificate key file for HTTPS server")
@@ -49,6 +51,7 @@ func main() {
 
 	r.Get("/kerrareg/modules/v1/download/azure/{subID}/{rg}/{account}/{accountUrl}/{name}/{fileName}", serveModuleFromAzureBlob)
 	r.Get("/kerrareg/modules/v1/download/fileSystem/{directory}/{name}/{fileName}", serveModuleFromFileSystem)
+	r.Get("/kerrareg/modules/v1/download/gcs/{bucket}/{name}/{fileName}", serveModuleFromGCS)
 	r.Get("/kerrareg/modules/v1/download/s3/{bucket}/{region}/{name}/{fileName}", serveModuleFromS3)
 
 	if *kerraregCertPath != "" && *kerraregCertKey != "" {
@@ -110,26 +113,8 @@ func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r 
 
 func getDownloadModuleUrl(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	var kubeconfig []byte
-	var bearerToken string
 
-	if *kerraregUseBearerToken {
-		bearerToken = r.Header.Get("Authorization")
-		if bearerToken == "" {
-			http.Error(w, "missing Authorization header", http.StatusUnauthorized)
-			return
-		}
-	} else {
-		config, err := extractKubeconfig(w, r)
-		if err != nil {
-			logger.Error("unable to extract kubeconfig", "error", err)
-			return
-		}
-
-		kubeconfig = config
-	}
-
-	clientset, err := generateKubeClient(kubeconfig, &bearerToken, *kerraregUseBearerToken)
+	clientset, err := getKubeClientFromRequest(w, r)
 	if err != nil {
 		logger.Error("unable to generate kubeclient", "error", err)
 		return
@@ -155,7 +140,15 @@ func getDownloadModuleUrl(w http.ResponseWriter, r *http.Request) {
 
 	if moduleVersion.Spec.ModuleConfigRef.StorageConfig.FileSystem != nil {
 		downloadPath = fmt.Sprintf("fileSystem/%s/%s/%s",
-			url.PathEscape(*moduleVersion.Spec.ModuleConfigRef.StorageConfig.FileSystem.DirectoryPath),
+			base64.RawURLEncoding.EncodeToString([]byte(*moduleVersion.Spec.ModuleConfigRef.StorageConfig.FileSystem.DirectoryPath)),
+			*moduleVersion.Spec.ModuleConfigRef.Name,
+			*moduleVersion.Spec.FileName,
+		)
+	}
+
+	if moduleVersion.Spec.ModuleConfigRef.StorageConfig.GCS != nil {
+		downloadPath = fmt.Sprintf("gcs/%s/%s/%s",
+			moduleVersion.Spec.ModuleConfigRef.StorageConfig.GCS.Bucket,
 			*moduleVersion.Spec.ModuleConfigRef.Name,
 			*moduleVersion.Spec.FileName,
 		)
@@ -224,19 +217,54 @@ func serveModuleFromAzureBlob(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveModuleFromFileSystem(w http.ResponseWriter, r *http.Request) {
-	dir := chi.URLParam(r, "directory")
+	encodedDir := chi.URLParam(r, "directory")
 	moduleName := chi.URLParam(r, "name")
 	fileName := chi.URLParam(r, "fileName")
 	checksum := r.URL.Query().Get("fileChecksum")
 
-	dir, err := url.PathUnescape(dir)
-	if err != nil {
-		logger.Error("failed to unescape file name", "error", err)
-		http.Error(w, "failed to get module", http.StatusInternalServerError)
+	// go-getter sends ?terraform-get=1 to detect source URLs via HTML meta tags.
+	// We intercept this and return the X-Terraform-Get header pointing to the same
+	// download URL. go-getter reads the header before parsing the body, then processes
+	// the source URL through its full pipeline which detects the archive extension
+	// and uses direct file download (no further terraform-get detection).
+	if r.URL.Query().Get("terraform-get") == "1" {
+		scheme := "https"
+		if r.TLS == nil {
+			if fwdProto := r.Header.Get("X-Forwarded-Proto"); fwdProto != "" {
+				scheme = fwdProto
+			} else {
+				scheme = "http"
+			}
+		}
+
+		q := url.Values{}
+		q.Set("fileChecksum", checksum)
+
+		// GitHub tarballs are gzip-compressed despite having .tar extension.
+		// go-getter uses the archive param to select the decompressor, so we
+		// must specify tar.gz for gzipped tarballs.
+		ext := path.Ext(fileName)
+		archiveType := strings.TrimPrefix(ext, ".")
+		if archiveType == "tar" {
+			archiveType = "tar.gz"
+		}
+		q.Set("archive", archiveType)
+		sourceURL := fmt.Sprintf("%s://%s/kerrareg/modules/v1/download/fileSystem/%s/%s/%s?%s",
+			scheme, r.Host, encodedDir, moduleName, fileName, q.Encode())
+		w.Header().Set("X-Terraform-Get", sourceURL)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	logger.Info("the unescaped dir", "dir", dir)
+	dirBytes, err := base64.RawURLEncoding.DecodeString(encodedDir)
+	if err != nil {
+		logger.Error("failed to decode directory path", "error", err)
+		http.Error(w, "failed to get module", http.StatusInternalServerError)
+		return
+	}
+	dir := string(dirBytes)
+
+	logger.Info("filesystem download", "dir", dir, "module", moduleName, "file", fileName)
 
 	filePath := path.Join(
 		dir,
@@ -251,6 +279,40 @@ func serveModuleFromFileSystem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	getObjectFromStorageSystem(w, r, storage, soi, checksum)
+}
+
+func serveModuleFromGCS(w http.ResponseWriter, r *http.Request) {
+	bucket := chi.URLParam(r, "bucket")
+	name := chi.URLParam(r, "name")
+	fileName := chi.URLParam(r, "fileName")
+	checksum := r.URL.Query().Get("fileChecksum")
+
+	gcsStorage := &storage.GoogleCloudStorage{}
+	if err := gcsStorage.NewClient(r.Context()); err != nil {
+		logger.Error("failed to init gcs client", "error", err, "bucket", bucket)
+		http.Error(w, "failed to get module", http.StatusInternalServerError)
+		return
+	}
+
+	version := &kerraregv1alpha1.Version{
+		Spec: kerraregv1alpha1.VersionSpec{
+			ModuleConfigRef: &kerraregv1alpha1.ModuleConfig{
+				StorageConfig: &kerraregv1alpha1.StorageConfig{
+					GCS: &kerraregv1alpha1.GoogleCloudStorageConfig{
+						Bucket: bucket,
+					},
+				},
+			},
+		},
+	}
+
+	soi := &storageTypes.StorageObjectInput{
+		FilePath: aws.String(fmt.Sprintf("%s/%s", name, fileName)),
+		Method:   storageTypes.Get,
+		Version:  version,
+	}
+
+	getObjectFromStorageSystem(w, r, gcsStorage, soi, checksum)
 }
 
 func serveModuleFromS3(w http.ResponseWriter, r *http.Request) {
@@ -327,13 +389,22 @@ func getObjectFromStorageSystem(w http.ResponseWriter, r *http.Request, storage 
 // to generate the necessary rest.Config settings for TLS connections.
 func generateKubeClient(kubeconfig []byte, bearerToken *string, useBearerToken bool) (*kubernetes.Clientset, error) {
 	var clientConfig *rest.Config
-	if useBearerToken {
-		clientConfig, err := rest.InClusterConfig()
+	var err error
+
+	if bearerToken == nil && kubeconfig == nil {
+		// Anonymous auth: use in-cluster config with the server's own service account
+		clientConfig, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, err
+		}
+	} else if useBearerToken {
+		clientConfig, err = rest.InClusterConfig()
 		if err != nil {
 			return nil, err
 		}
 
 		clientConfig.BearerToken = *bearerToken
+		clientConfig.BearerTokenFile = ""
 	} else {
 		config, err := clientcmd.NewClientConfigFromBytes(kubeconfig)
 		if err != nil {
@@ -352,6 +423,36 @@ func generateKubeClient(kubeconfig []byte, bearerToken *string, useBearerToken b
 	}
 
 	return clientset, nil
+}
+
+// getKubeClientFromRequest creates a Kubernetes clientset based on the configured auth mode.
+// When anonymous auth is enabled, uses the server's in-cluster service account.
+// When bearer token mode is enabled, extracts the token from the Authorization header.
+// Otherwise, extracts a base64-encoded kubeconfig from the Authorization header.
+func getKubeClientFromRequest(w http.ResponseWriter, r *http.Request) (*kubernetes.Clientset, error) {
+	if *kerraregAnonymousAuth {
+		return generateKubeClient(nil, nil, false)
+	}
+
+	var kubeconfig []byte
+	var bearerToken string
+
+	if *kerraregUseBearerToken {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "missing Authorization header", http.StatusUnauthorized)
+			return nil, fmt.Errorf("missing Authorization header")
+		}
+		bearerToken = strings.TrimPrefix(authHeader, "Bearer ")
+	} else {
+		config, err := extractKubeconfig(w, r)
+		if err != nil {
+			return nil, err
+		}
+		kubeconfig = config
+	}
+
+	return generateKubeClient(kubeconfig, &bearerToken, *kerraregUseBearerToken)
 }
 
 func extractKubeconfig(w http.ResponseWriter, r *http.Request) ([]byte, error) {
@@ -373,22 +474,8 @@ func extractKubeconfig(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 
 func getModuleVersions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	var kubeconfig []byte
-	var bearerToken string
 
-	if *kerraregUseBearerToken {
-		bearerToken = r.Header.Get("Authorization")
-	} else {
-		config, err := extractKubeconfig(w, r)
-		if err != nil {
-			logger.Error("unable to extract kubeconfig", "error", err)
-			return
-		}
-
-		kubeconfig = config
-	}
-
-	clientset, err := generateKubeClient(kubeconfig, &bearerToken, *kerraregUseBearerToken)
+	clientset, err := getKubeClientFromRequest(w, r)
 	if err != nil {
 		logger.Error("unable to generate kubeclient", "error", err)
 		return
@@ -405,7 +492,7 @@ func getModuleVersions(w http.ResponseWriter, r *http.Request) {
 		Name(name).
 		DoRaw(r.Context())
 	if err != nil {
-		logger.Error("unable to get modules", "error", err)
+		logger.Error("unable to get modules", "error", err, "namespace", namespace, "name", name, "responseBody", string(result))
 	}
 
 	var module kerraregv1alpha1.Module

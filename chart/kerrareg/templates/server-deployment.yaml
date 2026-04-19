@@ -18,32 +18,80 @@ spec:
     spec:
       serviceAccountName: server
       securityContext:
+        {{- if not (and .Values.storage.filesystem.enabled .Values.storage.filesystem.hostPath) }}
         runAsNonRoot: true
+        {{- end }}
         runAsUser: 65532
+        {{- if .Values.storage.filesystem.enabled }}
+        fsGroup: 65532
+        {{- end }}
+      {{- if and .Values.storage.filesystem.enabled .Values.storage.filesystem.hostPath }}
+      initContainers:
+      - name: fix-permissions
+        image: busybox:1.37
+        command: ["sh", "-c", "chown -R 65532:65532 {{ .Values.storage.filesystem.mountPath }}"]
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+        - name: modules
+          mountPath: {{ .Values.storage.filesystem.mountPath }}
+      {{- end }}
       containers:
       - name: server
         image: "{{ .Values.server.image.repository }}:{{ .Values.global.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        args:
+        {{- if .Values.server.anonymousAuth }}
+        - --anonymous-auth
+        {{- end }}
+        {{- if .Values.server.useBearerToken }}
+        - --use-bearer-token
+        {{- end }}
+        {{- if .Values.server.tls.enabled }}
+        - --tls-cert-path={{ .Values.server.tls.certPath }}
+        - --tls-cert-key={{ .Values.server.tls.keyPath }}
+        {{- end }}
         ports:
-        - name: https
+        - name: http
           containerPort: {{ .Values.server.service.targetPort }}
           protocol: TCP
         securityContext:
           allowPrivilegeEscalation: false
+          {{- if not .Values.storage.filesystem.enabled }}
           readOnlyRootFilesystem: true
+          {{- end }}
         resources:
           {{- toYaml .Values.server.resources | nindent 10 }}
-        {{- if .Values.server.tls.enabled }}
+        {{- if or .Values.server.tls.enabled .Values.storage.filesystem.enabled }}
         volumeMounts:
+        {{- if .Values.server.tls.enabled }}
         - name: tls
           mountPath: {{ .Values.server.tls.certPath | dir }}
           readOnly: true
         {{- end }}
-      {{- if .Values.server.tls.enabled }}
+        {{- if .Values.storage.filesystem.enabled }}
+        - name: modules
+          mountPath: {{ .Values.storage.filesystem.mountPath }}
+        {{- end }}
+        {{- end }}
+      {{- if or .Values.server.tls.enabled .Values.storage.filesystem.enabled }}
       volumes:
+      {{- if .Values.server.tls.enabled }}
       - name: tls
         secret:
           secretName: kerrareg-tls
+      {{- end }}
+      {{- if .Values.storage.filesystem.enabled }}
+      - name: modules
+        {{- if .Values.storage.filesystem.hostPath }}
+        hostPath:
+          path: {{ .Values.storage.filesystem.hostPath }}
+          type: DirectoryOrCreate
+        {{- else }}
+        persistentVolumeClaim:
+          claimName: kerrareg-modules
+        {{- end }}
+      {{- end }}
       {{- end }}
       {{- with .Values.server.nodeSelector }}
       nodeSelector:

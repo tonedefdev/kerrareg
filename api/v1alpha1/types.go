@@ -43,12 +43,13 @@ type GlobalConfig struct {
 
 // DepotStatus defines the observed state of Depot.
 type DepotStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// The list of Module resource names created and managed by this Depot.
+	Modules []string `json:"modules,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="GlobalConfig",type="string",JSONPath=".spec.globalConfig",description="The global configuration applied to all modules managed by this Depot"
 
 // Depot is the Schema for the depots API.
 type Depot struct {
