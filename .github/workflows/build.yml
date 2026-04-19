@@ -4,8 +4,12 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
     paths:
       - 'services/**'
+      - 'pkg/**'
+      - 'api/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
 
@@ -64,7 +68,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.service.path }}
+          context: .
           file: ${{ matrix.service.path }}/Dockerfile
           platforms: linux/${{ matrix.arch }}
           push: ${{ github.event_name != 'pull_request' }}
