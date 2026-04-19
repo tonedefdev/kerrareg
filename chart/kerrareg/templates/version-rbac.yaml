@@ -2,7 +2,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: version-controller-manager-role
+  name: version-controller-role
 rules:
 - apiGroups:
   - kerrareg.io
@@ -42,13 +42,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: version-controller-manager-rolebinding
+  name: version-controller-role-binding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: version-controller-manager-role
+  name: version-controller-role
 subjects:
 - kind: ServiceAccount
-  name: version-controller-manager
+  name: version-controller
   namespace: {{ .Values.global.namespace }}
 {{- end }}

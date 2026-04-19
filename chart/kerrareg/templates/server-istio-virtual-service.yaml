@@ -1,0 +1,21 @@
+{{- if .Values.server.ingress.istio.enabled }}
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: kerrareg-server
+  namespace: {{ .Values.global.namespace }}
+spec:
+  hosts:
+  {{- range .Values.server.ingress.istio.hosts }}
+  - {{ . | quote }}
+  {{- end }}
+  gateways:
+  - istio-ingress/istio-ingress-gateway
+  http:
+  - name: kerrareg-server
+    route:
+    - destination:
+        host: server
+        port:
+          number: {{ .Values.server.service.port }}
+{{- end }}

@@ -7,7 +7,7 @@ global:
   namespace: kerrareg-system
   imagePullPolicy: IfNotPresent
   image:
-    tag: main-8e33ae7  # Override the image tag for all controllers
+    tag: main-702bc1c # Override the image tag for all controllers
 
 ## Version Service (Core - handles GitHub fetching and storage)
 version:
@@ -68,12 +68,14 @@ server:
     repository: ghcr.io/tonedefdev/kerrareg/server
   service:
     type: LoadBalancer
-    port: 443
-    targetPort: 8443
+    port: 80
+    targetPort: 8080
   ingress:
     enabled: false
-    className: nginx
-    annotations: {}
+    istio:
+      enabled: true
+      hosts:
+      - kerrareg.defdev.io
     hosts:
       - host: kerrareg.defdev.io
         paths:

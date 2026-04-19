@@ -2,29 +2,29 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: depot-controller-manager
+  name: depot-controller
   namespace: {{ .Values.global.namespace }}
   labels:
     app: depot-controller
-    control-plane: controller-manager
+    control-plane: controller
 spec:
   replicas: {{ .Values.depot.replicaCount }}
   selector:
     matchLabels:
       app: depot-controller
-      control-plane: controller-manager
+      control-plane: controller
   template:
     metadata:
       labels:
         app: depot-controller
-        control-plane: controller-manager
+        control-plane: controller
     spec:
-      serviceAccountName: depot-controller-manager
+      serviceAccountName: depot-controller
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
       containers:
-      - name: manager
+      - name: depot-controller
         image: "{{ .Values.depot.image.repository }}:{{ .Values.global.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         securityContext:

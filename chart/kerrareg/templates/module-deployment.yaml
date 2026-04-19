@@ -2,29 +2,29 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: module-controller-manager
+  name: module-controller
   namespace: {{ .Values.global.namespace }}
   labels:
     app: module-controller
-    control-plane: controller-manager
+    control-plane: controller
 spec:
   replicas: {{ .Values.module.replicaCount }}
   selector:
     matchLabels:
       app: module-controller
-      control-plane: controller-manager
+      control-plane: controller
   template:
     metadata:
       labels:
         app: module-controller
-        control-plane: controller-manager
+        control-plane: controller
     spec:
-      serviceAccountName: module-controller-manager
+      serviceAccountName: module-controller
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
       containers:
-      - name: manager
+      - name: deployment-controller
         image: "{{ .Values.module.image.repository }}:{{ .Values.global.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         securityContext:

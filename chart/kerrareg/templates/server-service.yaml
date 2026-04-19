@@ -7,11 +7,11 @@ metadata:
   labels:
     app: server
 spec:
-  type: {{ .Values.server.service.type }}
+  type: ClusterIP
   selector:
     app: server
   ports:
-  - name: https
+  - name: http
     port: {{ .Values.server.service.port }}
     targetPort: {{ .Values.server.service.targetPort }}
     protocol: TCP
