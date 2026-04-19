@@ -20,8 +20,7 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-# Go workspace file
-go.work
+# Go workspace file sums
 go.work.sum
 
 # env file

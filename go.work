@@ -1,0 +1,11 @@
+go 1.25.5
+
+use (
+	./api/v1alpha1
+	./services/depot
+	./services/module
+	./services/server
+	./services/version
+	./pkg/storage
+	./pkg/github
+)
