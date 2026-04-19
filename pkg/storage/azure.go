@@ -79,9 +79,14 @@ func (storage *AzureBlobStorage) GetObjectChecksum(ctx context.Context, soi *sto
 	return nil
 }
 
-// DeleteObject deletes the Version file from the specified bucket.
+// DeleteObject deletes the Version file from the specified container.
 func (storage *AzureBlobStorage) DeleteObject(ctx context.Context, soi *storagetypes.StorageObjectInput) error {
-	return nil
+	_, err := storage.blobClient.DeleteBlob(ctx,
+		*soi.Version.Spec.ModuleConfigRef.Name,
+		*soi.FilePath,
+		&azblob.DeleteBlobOptions{},
+	)
+	return err
 }
 
 // PutObject puts the Version file in the specified bucket with its computed base64 encoded SHA256 checksum.

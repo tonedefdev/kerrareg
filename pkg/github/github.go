@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dgrijalva/jwt-go"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/go-logr/logr"
 	"github.com/google/go-github/v81/github"
 	"golang.org/x/oauth2"
@@ -124,26 +124,35 @@ func GetArchiveRequest(ctx context.Context, githubClient *github.Client, version
 	al, alResp, err := githubClient.Repositories.GetArchiveLink(ctx, version.Spec.ModuleConfigRef.RepoOwner, *version.Spec.ModuleConfigRef.Name, format, &github.RepositoryContentGetOptions{
 		Ref: ref,
 	}, 10)
-	defer alResp.Body.Close()
 
 	if err != nil {
+		if alResp != nil {
+			alResp.Body.Close()
+		}
 		return nil, err
 	}
 
+	defer alResp.Body.Close()
+
 	if al == nil || alResp == nil {
-		return nil, fmt.Errorf("the response from the Github API was nil: %w", err)
+		return nil, fmt.Errorf("the response from the Github API was nil")
 	}
 
 	if alResp.StatusCode != 302 {
-		return nil, fmt.Errorf("failed to get Github archive link: status code %d: %w", alResp.StatusCode, err)
+		return nil, fmt.Errorf("failed to get Github archive link: status code %d", alResp.StatusCode)
 	}
 
-	archiveReq, err := http.Get(al.String())
+	archiveReq, err := http.NewRequestWithContext(ctx, http.MethodGet, al.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request for archive link: %w", err)
 	}
 
-	return archiveReq, nil
+	archiveResp, err := http.DefaultClient.Do(archiveReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute HTTP request for archive link: %w", err)
+	}
+
+	return archiveResp, nil
 }
 
 // GenerateGithubClient creates a GitHub client using a GitHub Application for authentication.

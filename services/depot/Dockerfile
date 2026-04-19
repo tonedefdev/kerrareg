@@ -4,23 +4,29 @@ ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /workspace
-# Copy the Go Modules manifests
-COPY go.mod go.mod
-COPY go.sum go.sum
-# cache deps before building and copying source so that we don't need to re-download as much
-# and so that source changes don't invalidate our downloaded layer
-RUN go mod download
 
-# Copy the go source
-COPY cmd/main.go cmd/main.go
-COPY internal/ internal/
+# Copy go.work and all module manifests for workspace-aware builds
+COPY go.work go.work
+COPY api/v1alpha1/go.mod api/v1alpha1/go.sum api/v1alpha1/
+COPY pkg/storage/go.mod pkg/storage/go.sum pkg/storage/
+COPY pkg/github/go.mod pkg/github/go.sum pkg/github/
+COPY services/depot/go.mod services/depot/go.sum services/depot/
+COPY services/module/go.mod services/module/go.sum services/module/
+COPY services/server/go.mod services/server/go.sum services/server/
+COPY services/version/go.mod services/version/go.sum services/version/
+
+# Download dependencies (workspace off since not all modules are copied yet)
+RUN cd services/depot && GOWORK=off go mod download
+
+# Copy source
+COPY api/v1alpha1/ api/v1alpha1/
+COPY pkg/storage/ pkg/storage/
+COPY pkg/github/ pkg/github/
+COPY services/depot/cmd/ services/depot/cmd/
+COPY services/depot/internal/ services/depot/internal/
 
 # Build
-# the GOARCH has not a default value to allow the binary be built according to the host where the command
-# was called. For example, if we call make docker-build in a local env which has the Apple Silicon M1 SO
-# the docker BUILDPLATFORM arg will be linux/arm64 when for Apple x86 it will be linux/amd64. Therefore,
-# by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o depot-controller cmd/main.go
+RUN cd services/depot && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o /workspace/depot-controller cmd/main.go
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details

@@ -70,22 +70,23 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		"depot", depot.ObjectMeta.Name,
 	)
 
+	var managedModules []string
 	if len(depot.Spec.ModuleConfigs) > 0 {
 		for _, moduleConfig := range depot.Spec.ModuleConfigs {
 			// Set global configs if not set on module config
-			if moduleConfig.StorageConfig == nil {
+			if moduleConfig.StorageConfig == nil && depot.Spec.GlobalConfig != nil {
 				moduleConfig.StorageConfig = depot.Spec.GlobalConfig.StorageConfig
 			}
 
-			if moduleConfig.GithubClientConfig == nil {
+			if moduleConfig.GithubClientConfig == nil && depot.Spec.GlobalConfig != nil {
 				moduleConfig.GithubClientConfig = depot.Spec.GlobalConfig.GithubClientConfig
 			}
 
-			if moduleConfig.FileFormat == nil {
+			if moduleConfig.FileFormat == nil && depot.Spec.GlobalConfig != nil && depot.Spec.GlobalConfig.ModuleConfig != nil {
 				moduleConfig.FileFormat = depot.Spec.GlobalConfig.ModuleConfig.FileFormat
 			}
 
-			if moduleConfig.Immutable == nil {
+			if moduleConfig.Immutable == nil && depot.Spec.GlobalConfig != nil && depot.Spec.GlobalConfig.ModuleConfig != nil {
 				moduleConfig.Immutable = depot.Spec.GlobalConfig.ModuleConfig.Immutable
 			}
 
@@ -110,12 +111,21 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			}
 
 			var githubClient *github.Client
-			githubConfig, err := kerraregGithub.GetGithubApplicationSecret(ctx, r.Client, depot.Namespace)
-			if err != nil {
-				return ctrl.Result{}, err
+
+			useAuthClient := false
+			if module.Spec.ModuleConfig.GithubClientConfig != nil {
+				useAuthClient = module.Spec.ModuleConfig.GithubClientConfig.UseAuthenticatedClient
 			}
 
-			authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, module.Spec.ModuleConfig.GithubClientConfig.UseAuthenticatedClient, githubConfig)
+			var githubConfig *kerraregGithub.GithubClientConfig
+			if useAuthClient {
+				githubConfig, err = kerraregGithub.GetGithubApplicationSecret(ctx, r.Client, depot.Namespace)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+
+			authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, useAuthClient, githubConfig)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -199,6 +209,10 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			var currentModule kerraregv1alpha1.Module
 			err = r.Get(ctx, moduleObject, &currentModule)
 			if err != nil {
+				if !errors.IsNotFound(err) {
+					return ctrl.Result{}, err
+				}
+
 				if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 					if err := r.Create(ctx, &module); err != nil {
 						return err
@@ -207,20 +221,40 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				}); err != nil {
 					return ctrl.Result{}, err
 				}
-			}
+			} else {
+				if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+					if err := r.Get(ctx, moduleObject, &currentModule); err != nil {
+						return err
+					}
 
-			if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-				currentModule.Spec.ModuleConfig = moduleConfig
-				currentModule.Spec.Versions = module.Spec.Versions
-				if err := r.Update(ctx, &currentModule); err != nil {
-					return err
+					currentModule.Spec.ModuleConfig = moduleConfig
+					currentModule.Spec.Versions = module.Spec.Versions
+					if err := r.Update(ctx, &currentModule); err != nil {
+						return err
+					}
+					return nil
+				}); err != nil {
+					return ctrl.Result{}, err
 				}
-				return nil
-			}); err != nil {
-				return ctrl.Result{}, err
 			}
 
+			managedModules = append(managedModules, *moduleConfig.Name)
 		}
+	}
+
+	if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		if err := r.Get(ctx, req.NamespacedName, &depot); err != nil {
+			return err
+		}
+
+		depot.Status.Modules = managedModules
+		if err := r.Status().Update(ctx, &depot); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		r.Log.Error(err, "Failed to update Depot status", "depot", depot.Name)
+		return ctrl.Result{}, err
 	}
 
 	if depot.Spec.PollingIntervalMinutes != nil {

@@ -377,6 +377,13 @@ spec:
             type: object
           status:
             description: DepotStatus defines the observed state of Depot.
+            properties:
+              modules:
+                description: The list of Module resource names created and managed
+                  by this Depot.
+                items:
+                  type: string
+                type: array
             type: object
         type: object
     served: true

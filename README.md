@@ -1,413 +1,478 @@
-# Kerrareg: A Terraform Module Registry Implementation
+# Kerrareg
 
-Kerrareg is a self-hosted Terraform Module Registry that implements the official [Terraform Module Registry Protocol](https://developer.hashicorp.com/terraform/internals/module-registry-protocol). It enables organizations to create private module registries without relying on the public Terraform Registry, giving you complete control over module distribution, versioning, and storage.
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/tonedefdev/kerrareg/blob/main/LICENSE)
+[![Helm](https://img.shields.io/badge/Helm_Chart-0.1.0-0F1689?logo=helm&logoColor=white)](https://github.com/tonedefdev/kerrareg/tree/main/chart/kerrareg)
+
+<p align="center">
+  <img src="img/kerrareg.png" width="400" />
+</p>
+
+A Kubernetes-native, self-hosted module registry that implements the [Module Registry Protocol](https://opentofu.org/docs/internals/module-registry-protocol/). Kerrareg gives organizations complete control over module distribution, versioning, and storage — without relying on the public registry.
+
+Compatible with **OpenTofu** (all versions) and **Terraform** (v1.2+).
 
 ## Table of Contents
 
-- [What is a Terraform Module Registry?](#what-is-a-terraform-module-registry)
-- [Architecture Overview](#architecture-overview)
+- [How It Works](#how-it-works)
+- [Architecture](#architecture)
 - [Services](#services)
+- [Storage Backends](#storage-backends)
 - [Getting Started](#getting-started)
-- [Prerequisites](#prerequisites)
 - [Configuration](#configuration)
-- [Deployment](#deployment)
+- [Usage](#usage)
+- [Migrating to Kerrareg](#migrating-to-kerrareg)
+- [Authenticating with Kerrareg](#authenticating-with-kerrareg)
+- [Kubernetes RBAC](#kubernetes-rbac)
+- [API Reference](#api-reference)
+- [Version Constraints](#version-constraints)
+- [Project Structure](#project-structure)
+- [License](#license)
 
-## What is a Terraform Module Registry?
+## How It Works
 
-A Terraform Module Registry is a service that implements a standardized protocol for discovering and downloading Terraform modules. When you reference a module in your Terraform configuration like:
+When you reference a module in your OpenTofu configuration:
 
 ```hcl
-module "example" {
-  source = "registry.example.com/myorg/vpc/aws"
-  version = "~> 1.2.0"
+module "eks" {
+  source  = "kerrareg.defdev.io/kerrareg-system/terraform-aws-eks/aws"
+  version = "~> 21.0"
 }
 ```
 
-Terraform CLI uses the Module Registry Protocol to:
+OpenTofu uses the Module Registry Protocol to:
 
-1. **Discover available versions** - Query the registry for all versions of the module matching your version constraints
-2. **Resolve version constraints** - Match your semantic version constraints (`~> 1.2.0`, `>= 1.0.0, < 2.0.0`, etc.) against available versions
-3. **Download the module** - Retrieve the source code for the selected module version
+1. **Discover** the registry API via `/.well-known/terraform.json`
+2. **List versions** matching your constraint (`~> 21.0`)
+3. **Download** the module archive from the configured storage backend
 
-Kerrareg implements all required endpoints of this protocol, allowing Terraform CLI and other IaC tools (like OpenTofu) to treat your private registry exactly like the public Terraform Registry.
+Kerrareg implements all required protocol endpoints, making it a drop-in replacement for any public or private module registry.
 
-## Architecture Overview
+## Architecture
 
-Kerrareg consists of multiple services that work together in a Kubernetes environment:
+Kerrareg consists of four services running in Kubernetes:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                  Terraform CLI / OpenTofu               │
-└────────────────────┬────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│            Server (Registry Protocol API)               │
-│  • Service Discovery                                    │
-│  • List Available Versions                              │
-│  • Download Module Endpoint                             │
-│  • File Serving (S3, Azure Blob, Filesystem)            │
-└────────────────────┬────────────────────────────────────┘
-                     │
-    ┌────────────────┼────────────────┐
-    ▼                ▼                ▼
-┌────────┐      ┌────────┐      ┌──────────────┐
-│ Depot  │      │ Module │      │ Version      │
-│        │      │        │      │ (Core)       │
-└────┬───┘      └────────┘      └────┬─────────┘
-     │                               │
-     └───────────────┬───────────────┘
-                     ▼
-        ┌────────────┬────────────┐
-        ▼            ▼            ▼
-   ┌─────────┐ ┌─────────┐ ┌──────────┐
-   │ GitHub  │ │ Storage │ │ Metadata │
-   │ (fetch) │ │Backends │ │ (S3/Az)  │
-   └─────────┘ └─────────┘ └──────────┘
+┌───────────────────────────────────────────────────────────┐
+│                   OpenTofu / Terraform CLI                 │
+└────────────────────────┬──────────────────────────────────┘
+                         │
+                         ▼
+┌───────────────────────────────────────────────────────────┐
+│               Server (Registry Protocol API)              │
+│  • Service Discovery    • List Versions                   │
+│  • Download Redirect    • File Serving (S3/Azure/FS)      │
+└────────────────────────┬──────────────────────────────────┘
+                         │ reads Version + Module resources
+       ┌─────────────────┼─────────────────┐
+       ▼                 ▼                 ▼
+  ┌─────────┐      ┌──────────┐      ┌──────────┐
+  │  Depot   │─────▶│  Module  │─────▶│ Version  │
+  │controller│      │controller│      │controller│
+  └─────────┘      └──────────┘      └────┬─────┘
+  discovers          creates               │ fetches & stores
+  versions from      Version               ▼
+  GitHub             resources        ┌──────────┐
+                                      │ Storage  │
+                                      │ Backend  │
+                                      └──────────┘
+                                      S3 │ Azure │ GCS │ FS
 ```
+
+### Event Flow
+
+1. **Depot controller** watches `Depot` resources, queries GitHub for releases matching version constraints, and creates or updates `Module` resources
+2. **Module controller** watches `Module` resources, creates a `Version` resource for each version listed in `spec.versions`, generates unique filenames, and tracks the latest version
+3. **Version controller** watches `Version` resources, fetches module source from GitHub, computes SHA256 checksums, and uploads archives to the configured storage backend
+4. **Server** handles OpenTofu/Terraform requests, queries Kubernetes for `Module` and `Version` resources, and redirects downloads to the storage backend
 
 ## Services
 
-### Version (`services/version`) - Core Service
+### Version Controller (Core)
 
-**The Version service is the most critical component of Kerrareg.** It handles the actual module source code retrieval and storage, implementing the core workflow that enables the entire registry to function.
+The most critical component. It performs the actual work of fetching module source code from GitHub and uploading it to storage.
 
-**Key Responsibilities:**
-- **GitHub Source Retrieval**: Fetches module source code from GitHub repositories at specific versions (tags/releases)
-- **Storage Interface Implementation**: Implements the unified storage interface to support multiple backends
-  - **Amazon S3**: Stores module archives in S3 buckets
-  - **Local Filesystem**: Stores modules locally (testing/development only)
-  - **Azure Blob Storage**: Stores modules in Azure Storage Accounts
-- **Module Preparation**: Transforms raw module source from GitHub into distribution-ready archives
-- **Checksum Generation**: Computes and validates SHA256 checksums for module versions
-- **Version Metadata**: Generates and stores version metadata required by the registry protocol
+**Reconciliation loop:**
 
-**How it works:**
-The Version controller watches for `Version` resources created by the Module controller and reconciles them by:
-1. Fetching the module source from GitHub at the specified version/tag
-2. Preparing the source into a distribution archive (tar.gz or zip)
-3. Computing the SHA256 checksum of the archive
-4. Uploading the archive to the configured storage backend
-5. Updating the Version resource status with checksum and sync information
+1. Fetches the module source from GitHub at the specified version/tag
+2. Packages the source into a distribution archive (`.tar.gz` or `.zip`)
+3. Computes a base64-encoded SHA256 checksum
+4. Uploads the archive to the configured storage backend
+5. Updates the `Version` resource status with the checksum and sync state
 
-**Storage Recommendation:**
-- Use **S3** or **Azure Blob Storage** for production environments
-- Use **Local Filesystem** storage only for testing and development
+**Immutability:** When `immutable: true` is set in the module config, the Version controller enforces that the stored checksum always matches the archive checksum. This prevents any modification or replacement of a published version.
 
-### Server (`services/server`)
+### Module Controller
 
-The **Server** implements the complete Terraform Module Registry Protocol. It exposes the following endpoints:
+Orchestrates version lifecycle management. For each version in `Module.spec.versions`, the Module controller:
 
-#### Service Discovery
-- **Endpoint**: `/.well-known/terraform.json`
-- **Response**: Returns the base URL for the module registry protocol endpoints
-- **Purpose**: Allows Terraform CLI to discover where the registry API is located
+- Creates a corresponding `Version` resource with the module configuration
+- Generates a UUID7 filename with the appropriate extension (`.zip` or `.tar.gz`)
+- Tracks the latest version using semantic version sorting
+- Garbage-collects orphaned `Version` resources when versions are removed
+- Enforces `versionHistoryLimit` when configured
 
-#### List Available Versions
-- **Endpoint**: `GET /kerrareg/modules/v1/{namespace}/{name}/{system}/versions`
-- **Response**: Returns all available versions of a module that match the module address
-- **Purpose**: Enables Terraform's version constraint resolution
+### Depot Controller
 
-#### Download Module
-- **Endpoint**: `GET /kerrareg/modules/v1/{namespace}/{name}/{system}/{version}/download`
-- **Response**: Returns a 204 No Content status with an `X-Terraform-Get` header containing the download location
-- **Purpose**: Provides Terraform with a download URL for the selected module version
+Automates module discovery from GitHub. The Depot controller:
 
-#### File Serving Endpoints
-The server also provides direct file serving capabilities for modules stored in various backends:
+- Queries the GitHub Releases API for each module in `spec.moduleConfigs`
+- Resolves version constraints against available releases
+- Creates or updates `Module` resources with discovered versions
+- Supports configurable polling intervals (`pollingIntervalMinutes`)
+- Inherits `global` config (storage, GitHub auth, file format) to each module unless overridden
+- Serves as a **migration bridge** — import modules from public registries, then delete the Depot once you transition to CI/CD-driven publishing
 
-- **S3**: `/kerrareg/modules/v1/download/s3/{bucket}/{region}/{name}/{fileName}`
-- **Azure Blob Storage**: `/kerrareg/modules/v1/download/azure/{subID}/{rg}/{account}/{accountUrl}/{name}/{fileName}`
-- **Filesystem**: `/kerrareg/modules/v1/download/fileSystem/{directory}/{name}/{fileName}`
+### Server
 
-These endpoints authenticate with Kubernetes to retrieve metadata about the module version, validate checksums, and serve the module archive directly to Terraform CLI.
-
-### Module (`services/module`)
-
-The **Module** is a Kubernetes controller that orchestrates the creation and management of module versions. It serves as the bridge between the Depot (which identifies which versions to create) and the Version controller (which performs the actual work).
-
-**Key Responsibilities:**
-- **Version Creation**: Creates `Version` resources for each module version that needs to be available
-- **Latest Version Tracking**: Automatically determines and tracks the latest available version of a module
-- **Lifecycle Management**: Manages the full lifecycle of module versions from creation through cleanup
-- **File Metadata**: Generates random filenames for versions and stores metadata about files
-
-**How it works:**
-1. The Module controller watches for changes to `Module` resources
-2. For each requested module version in the `Module.spec.versions` list:
-   - Creates a corresponding `Version` resource
-   - Adds module configuration references
-   - Triggers the Version controller to perform the actual work
-3. The Module controller also:
-   - Tracks the latest available version
-   - Generates random filenames for each version to ensure uniqueness
-   - Cleans up versions no longer needed
-   - Manages sync status and orchestrates the reconciliation process
-
-### Depot (`services/depot`)
-
-The **Depot** is a Kubernetes controller that acts as a module curator and version manager. It automatically manages module versions based on version constraints, similar to how a package manager like `npm` handles dependency resolution.
-
-**Key Responsibilities:**
-- **Version Constraint Resolution**: Monitors a list of `ModuleConfig` resources and automatically resolves version constraints (e.g., `>= 1.0.0, < 2.0.0`)
-- **Module Creation**: Creates `Module` resources for each `ModuleConfig`
-- **Source Discovery**: Queries GitHub repositories for available releases/tags matching your constraints
-- **Coordination**: Orchestrates the creation of `Module` and `Version` resources based on version constraints
-
-**How it works:**
-1. You define a `Depot` resource with a list of `ModuleConfig` entries, each specifying:
-   - Module name and provider
-   - GitHub repository location
-   - Version constraints (e.g., `~> 1.2.0` for bugfix updates only)
-   - Storage configuration
-   - Authentication settings
-
-2. The Depot controller watches for changes and automatically:
-   - Queries the GitHub repository for releases/tags
-   - Resolves version constraints using semantic versioning
-   - Creates or updates `Module` resources with the matching versions
-   - Triggers the Module controller to create specific `Version` resources
-
-#### When to Use the Depot
-
-The Depot supports two distinct workflow models:
-
-**Pull-Based Workflow (Depot-Driven)**
-
-Use the Depot for **public modules you don't control** or modules that are maintained externally. The Depot automatically pulls new versions from GitHub based on your version constraints, making it ideal for:
-
-- Consuming HashiCorp modules or community-maintained modules
-- Maintaining a curated set of external modules from multiple organizations
-- Automatic version updates without manual intervention
-- Initial migration of existing modules into Kerrareg
-
-**Push-Based Workflow (CI-Driven)**
-
-For **private modules you own and control**, use a **CI/CD pipeline** (e.g., GitHub Actions) instead of the Depot:
-
-1. In your module's GitHub repository, create a GitHub Actions workflow that:
-   - Triggers on new releases or version tags
-   - Builds and packages the module
-   - Generates a Kubernetes client authenticated to access Kerrareg
-   - Directly create or update the `Module` version references. This in turn creates any new `Version` resources in the cluster.
-   - The `Version` controller then pushes the module archive to your configured storage backend
-
-2. With this approach:
-   - No Depot is required (pull-based coordination is bypassed)
-   - You have full control over when versions are published
-   - Version constraints are determined by your CI logic
-   - Faster feedback loop from development to registry
-   - Better integration with your release process
-
-**Migration Path**
-
-The Depot is also valuable for **migrating existing modules to Kerrareg**:
-
-1. Create a Depot with `ModuleConfig` entries for all your current modules
-2. Specify version constraints to import existing versions (e.g., `"*"` to import all)
-3. The Depot automatically pulls and imports all modules into Kerrareg
-4. Verify everything is working correctly
-5. Once migration is complete:
-   - Delete the Depot resources
-   - Transition module owners to the push-based CI workflow
-   - Modules continue to be served by Kerrareg without the Depot
+Implements the Module Registry Protocol as an HTTP API. The server authenticates requests using either Kubernetes bearer tokens or base64-encoded kubeconfigs, then queries the Kubernetes API for module and version data.
 
 ## Storage Backends
 
-The Version service supports multiple storage backends for module archives through the Storage interface:
+Kerrareg supports four storage backends. Each is configured via the `storageConfig` field on `Depot.spec.global.storageConfig`, `ModuleConfig.storageConfig`, or directly on a `Module.spec.moduleConfig.storageConfig`.
 
-### Amazon S3 (Recommended for Production)
-Store modules in AWS S3 buckets with configurable regions and key prefixes. Provides high availability, durability, and integrates well with most cloud environments.
+### Amazon S3
 
-### Azure Blob Storage (Recommended for Production)
-Store modules in Azure Storage Accounts with support for subscriptions and resource groups. Ideal for Azure-centric environments.
+**Recommended for production.** Stores module archives in S3 buckets with SHA256 checksum validation.
 
-### Local Filesystem (Testing Only)
-Store modules on a local filesystem path. Use this backend only for development and testing environments. **Not recommended for production use.**
+**CRD Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `bucket` | string | Yes | S3 bucket name |
+| `region` | string | Yes | AWS region (e.g., `us-west-2`) |
+| `key` | string | No | Bucket key prefix (auto-generated by the Module controller) |
+
+**Authentication:** Uses the [AWS SDK v2 default credentials chain](https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/configure-gosdk.html). In Kubernetes, this typically means:
+
+- **EKS with IRSA** (recommended): Annotate the Version controller's ServiceAccount with an IAM role ARN
+- **Environment variables**: Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally `AWS_SESSION_TOKEN`
+- **EC2 instance profile**: Automatically used when running on EC2/EKS nodes
+
+**Required IAM Permissions:**
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "s3:GetObject",
+    "s3:PutObject",
+    "s3:DeleteObject",
+    "s3:GetObjectAttributes"
+  ],
+  "Resource": "arn:aws:s3:::your-bucket-name/*"
+}
+```
+
+**Example Configuration:**
+
+```yaml
+storageConfig:
+  s3:
+    bucket: kerrareg-modules
+    region: us-west-2
+```
+
+### Azure Blob Storage
+
+**Recommended for production.** Stores module archives in Azure Blob Storage containers with checksum metadata.
+
+**CRD Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `accountName` | string | Yes | Azure Storage Account name |
+| `accountUrl` | string | Yes | Storage Account URL (e.g., `https://myaccount.blob.core.windows.net`) |
+| `subscriptionID` | string | Yes | Azure subscription ID |
+| `resourceGroup` | string | Yes | Resource Group containing the Storage Account |
+
+**Authentication:** Uses [Azure DefaultAzureCredential](https://learn.microsoft.com/en-us/azure/developer/go/azure-sdk-authentication). In Kubernetes, this typically means:
+
+- **AKS with Workload Identity** (recommended): Configure federated identity credentials on the Version controller's ServiceAccount
+- **Managed Identity**: Assign a managed identity to the AKS node pool or pod
+- **Environment variables**: Set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_CLIENT_SECRET`
+
+**Required Azure RBAC Roles:**
+
+- `Storage Blob Data Contributor` on the Storage Account (for read, write, and delete)
+- `Reader` on the Storage Account resource (for container metadata operations)
+
+**Example Configuration:**
+
+```yaml
+storageConfig:
+  azureStorage:
+    accountName: kerraregmodules
+    accountUrl: https://kerraregmodules.blob.core.windows.net
+    subscriptionID: 00000000-0000-0000-0000-000000000000
+    resourceGroup: kerrareg-rg
+```
+
+### Google Cloud Storage
+
+**CRD Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `bucket` | string | Yes | GCS bucket name |
+
+**Authentication:** Uses [Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/application-default-credentials). In Kubernetes, this typically means:
+
+- **GKE with Workload Identity** (recommended): Bind a Google service account to the Version controller's Kubernetes ServiceAccount
+- **Service account key**: Mount a JSON key file and set `GOOGLE_APPLICATION_CREDENTIALS`
+
+**Required GCS Permissions:**
+
+- `storage.objects.create`
+- `storage.objects.get`
+- `storage.objects.delete`
+- `storage.objects.getMetadata` (or the `Storage Object Admin` role)
+
+**Example Configuration:**
+
+```yaml
+storageConfig:
+  gcs:
+    bucket: kerrareg-modules
+```
+
+### Local Filesystem
+
+Stores module archives on a shared volume mounted to both the Version controller and the Server pods. Suitable for **development, testing, and air-gapped environments** when paired with a `PersistentVolumeClaim`.
+
+**CRD Fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `directoryPath` | string | No | Directory path where modules are stored (must match the container mount path) |
+
+**How it works:** The Helm chart creates a shared volume (either a `PersistentVolumeClaim` or a `hostPath`) and mounts it to both the Version controller and the Server. The Version controller writes module archives to the volume, and the Server reads and serves them.
+
+**Helm Storage Configuration:**
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `storage.filesystem.enabled` | `false` | Enable shared volume for filesystem storage |
+| `storage.filesystem.mountPath` | `/data/modules` | Mount path inside containers |
+| `storage.filesystem.hostPath` | `""` | Use a hostPath volume (for local dev with kind) |
+| `storage.filesystem.storageClassName` | `""` | StorageClass for the PVC (must support `ReadWriteMany`) |
+| `storage.filesystem.size` | `10Gi` | PVC size |
+
+> **Important:** Set `directoryPath` in your CRD to match the `storage.filesystem.mountPath` Helm value (default `/data/modules`).
+
+**Local Development with kind (hostPath):**
+
+```bash
+helm upgrade --install kerrareg chart/kerrareg \
+  -n kerrareg-system \
+  --create-namespace \
+  --set storage.filesystem.enabled=true \
+  --set storage.filesystem.hostPath=/tmp/kerrareg-modules
+```
+
+When using `hostPath`, the chart adds an `initContainer` that runs as root to set ownership of the volume to uid `65532` (the non-root user the containers run as).
+
+**Production with PVC (ReadWriteMany):**
+
+```bash
+helm upgrade --install kerrareg chart/kerrareg \
+  -n kerrareg-system \
+  --create-namespace \
+  --set storage.filesystem.enabled=true \
+  --set storage.filesystem.storageClassName=efs-sc \
+  --set storage.filesystem.size=50Gi
+```
+
+The PVC requires a StorageClass that supports `ReadWriteMany` (e.g., AWS EFS, Azure Files, NFS).
+
+**Example CRD Configuration:**
+
+```yaml
+storageConfig:
+  fileSystem:
+    directoryPath: /data/modules
+```
+
+### Storage Backend Comparison
+
+| Feature | Amazon S3 | Azure Blob | Google Cloud Storage | Filesystem |
+|---------|-----------|------------|---------------------|------------|
+| Production Ready | Yes | Yes | Yes | With PVC |
+| Checksum Validation | SHA256 (native) | SHA256 (metadata) | SHA256 (metadata) | SHA256 (computed) |
+| Authentication | AWS SDK v2 defaults | DefaultAzureCredential | ADC | None |
+| Server Download Route | Yes | Yes | Yes | Yes |
+| Shared Volume Required | No | No | No | Yes (PVC or hostPath) |
 
 ## Getting Started
 
 ### Prerequisites
 
-- Go version v1.24.0+
-- Docker version 17.03+
-- kubectl version v1.11.3+
-- Access to a Kubernetes v1.11.3+ cluster
-- GitHub repository containing your modules (for pulling releases)
-- One of the supported storage backends (S3, Azure Blob Storage, or local filesystem)
+- Kubernetes v1.16+
+- Helm 3.0+
+- `kubectl` configured to access your cluster
+- A supported storage backend (S3 bucket, Azure Storage Account, or local filesystem)
+- *(Optional)* A GitHub App for authenticated API access
 
-### Installation
+### Install CRDs
 
-#### 1. Build and Push Container Images
+CRDs must be installed before deploying the Helm chart:
 
-Build the server, depot, and module services as Docker images:
-
-```sh
-# Build server image
-cd services/server
-docker build -t <registry>/kerrareg-server:latest .
-
-# Build depot image
-cd ../depot
-make docker-build docker-push IMG=<registry>/depot:latest
-
-# Build module image
-cd ../module
-make docker-build docker-push IMG=<registry>/module:latest
+```bash
+kubectl apply -f chart/kerrareg/crds/
 ```
 
-#### 2. Install CRDs
+### Install with Helm
 
-Install the Kerrareg Custom Resource Definitions:
-
-```sh
-cd services/version
-make install
-
-cd ../module
-make install
-
-cd ../depot
-make install
+```bash
+helm upgrade --install kerrareg chart/kerrareg \
+  -n kerrareg-system \
+  --create-namespace
 ```
 
-#### 3. Deploy Controllers
+To customize values:
 
-Deploy the Version, Module, and Depot controllers (deploy in this order):
-
-```sh
-# Deploy Version controller (core service - deploy first)
-cd services/version
-make deploy IMG=<registry>/version:latest
-
-# Deploy Module controller
-cd ../module
-make deploy IMG=<registry>/module:latest
-
-# Deploy Depot controller
-cd ../depot
-make deploy IMG=<registry>/depot:latest
+```bash
+helm upgrade --install kerrareg chart/kerrareg \
+  -n kerrareg-system \
+  --create-namespace \
+  --set global.image.tag=v0.1.0 \
+  --set server.service.type=ClusterIP \
+  --set depot.enabled=false
 ```
 
-#### 4. Deploy the Server
+Or use a values file:
 
-Deploy the Server as a service (typically as a Deployment with a LoadBalancer or Ingress):
-
-```sh
-kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: kerrareg-server
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: kerrareg-server
-  template:
-    metadata:
-      labels:
-        app: kerrareg-server
-    spec:
-      containers:
-      - name: server
-        image: <registry>/kerrareg-server:latest
-        ports:
-        - containerPort: 8443
-        volumeMounts:
-        - name: tls
-          mountPath: /etc/tls
-      volumes:
-      - name: tls
-        secret:
-          secretName: kerrareg-tls
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: kerrareg-server
-spec:
-  type: LoadBalancer
-  selector:
-    app: kerrareg-server
-  ports:
-  - protocol: TCP
-    port: 443
-    targetPort: 8443
-EOF
+```bash
+helm upgrade --install kerrareg chart/kerrareg \
+  -n kerrareg-system \
+  --create-namespace \
+  -f my-values.yaml
 ```
 
-### Configuration
+### Helm Chart Values
 
-#### Creating a Depot
+#### Global
 
-Define a `Depot` resource to specify which modules your registry should manage:
+| Value | Default | Description |
+|-------|---------|-------------|
+| `global.namespace` | `kerrareg-system` | Namespace for all resources |
+| `global.imagePullPolicy` | `IfNotPresent` | Image pull policy |
+| `global.image.tag` | `dev` | Image tag for all services |
 
-```yaml
-apiVersion: kerrareg.io/v1alpha1
-kind: Depot
-metadata:
-  name: my-modules
-spec:
-  global:
-    storageConfig:
-      s3:
-        bucket: my-module-bucket
-        region: us-west-2
-    githubClientConfig:
-      useAuthenticatedClient: true  # Requires kerrareg-github-application-secret
-  
-  moduleConfigs:
-    - name: vpc
-      provider: aws
-      repoOwner: myorg
-      repoUrl: https://github.com/myorg/terraform-aws-vpc
-      versionConstraints: ">= 1.0.0, < 2.0.0"
-      fileFormat: tar
-    
-    - name: ecs-cluster
-      provider: aws
-      repoOwner: myorg
-      repoUrl: https://github.com/myorg/terraform-aws-ecs
-      versionConstraints: "~> 2.1.0"
-      fileFormat: zip
+#### Server
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `server.enabled` | `true` | Deploy the server |
+| `server.replicaCount` | `1` | Number of replicas |
+| `server.anonymousAuth` | `false` | Use the server's service account for unauthenticated module access (see note below) |
+| `server.useBearerToken` | `true` | Use bearer token auth instead of kubeconfig |
+| `server.image.repository` | `ghcr.io/tonedefdev/kerrareg/server` | Server image |
+| `server.service.type` | `LoadBalancer` | Service type |
+| `server.service.port` | `80` | Service port |
+| `server.service.targetPort` | `8080` | Container port |
+| `server.tls.enabled` | `false` | Enable TLS on the server |
+| `server.tls.certPath` | `/etc/tls/tls.crt` | Path to TLS certificate |
+| `server.tls.keyPath` | `/etc/tls/tls.key` | Path to TLS key |
+| `server.ingress.enabled` | `false` | Enable Kubernetes Ingress |
+| `server.ingress.istio.enabled` | `true` | Enable Istio VirtualService |
+| `server.ingress.istio.hosts` | `[kerrareg.defdev.io]` | Istio VirtualService hosts |
+| `server.resources.requests.cpu` | `100m` | CPU request |
+| `server.resources.requests.memory` | `128Mi` | Memory request |
+| `server.resources.limits.cpu` | `500m` | CPU limit |
+| `server.resources.limits.memory` | `512Mi` | Memory limit |
+| `server.nodeSelector` | `{}` | Node selector |
+| `server.tolerations` | `[]` | Tolerations |
+| `server.affinity` | `{}` | Affinity rules |
+| `server.podDisruptionBudget.enabled` | `false` | Enable PDB |
+| `server.podDisruptionBudget.minAvailable` | `2` | Minimum available pods |
+| `server.ingress.enabled` | `false` | Enable Kubernetes Ingress |
+| `server.ingress.hosts` | see values.yaml | Standard Ingress host/path rules |
+| `server.ingress.tls` | `[]` | Standard Ingress TLS configuration |
+
+#### Controllers
+
+These values apply to `version`, `module`, and `depot` independently:
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `<service>.enabled` | `true` | Deploy the controller |
+| `<service>.replicaCount` | `1` | Number of replicas |
+| `<service>.image.repository` | `ghcr.io/tonedefdev/kerrareg/<service>-controller` | Image repository |
+| `<service>.resources.requests.cpu` | `100m` | CPU request |
+| `<service>.resources.requests.memory` | `128Mi` | Memory request |
+| `<service>.resources.limits.cpu` | `500m` | CPU limit |
+| `<service>.resources.limits.memory` | `512Mi` | Memory limit |
+| `<service>.nodeSelector` | `{}` | Node selector |
+| `<service>.tolerations` | `[]` | Tolerations |
+| `<service>.affinity` | `{}` | Affinity rules |
+
+#### Service Account & RBAC
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `serviceAccount.create` | `true` | Create service accounts |
+| `serviceAccount.annotations` | `{}` | Annotations (use for IRSA/Workload Identity) |
+| `rbac.create` | `true` | Create RBAC roles and bindings |
+
+#### Storage
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `storage.filesystem.enabled` | `false` | Enable shared volume for filesystem storage |
+| `storage.filesystem.mountPath` | `/data/modules` | Mount path inside containers |
+| `storage.filesystem.hostPath` | `""` | Use a hostPath volume (for local dev with kind) |
+| `storage.filesystem.storageClassName` | `""` | StorageClass for PVC (requires `ReadWriteMany`) |
+| `storage.filesystem.size` | `10Gi` | PVC storage size |
+
+### Build from Source (Alternative)
+
+If you prefer to build container images yourself:
+
+```bash
+# Build all services for linux/arm64
+make build
+
+# Load into a kind cluster
+make load
+
+# Or build and load in one step
+make deploy
 ```
 
-#### Defining Module Versions
+**Additional Makefile targets:**
 
-Create a `Module` resource that specifies which versions of a module should be available:
+| Target | Description |
+|--------|-------------|
+| `make build` | Build all container images |
+| `make load` | Load all images into the kind cluster |
+| `make deploy` | Build and load all images |
+| `make service NAME=server` | Build and load a single service |
+| `make restart` | Restart all deployments in `kerrareg-system` |
+| `make redeploy` | Build, load, and restart all services |
+| `make kind-restart` | Full cluster recreation with Istio, TLS, gateway, and Helm deploy |
 
-```yaml
-apiVersion: kerrareg.io/v1alpha1
-kind: Module
-metadata:
-  name: vpc-aws
-spec:
-  moduleConfig:
-    name: vpc
-    provider: aws
-    repoOwner: myorg
-    repoUrl: https://github.com/myorg/terraform-aws-vpc
-    storageConfig:
-      s3:
-        bucket: my-module-bucket
-        region: us-west-2
-  
-  versions:
-    - version: 1.0.0
-    - version: 1.1.0
-    - version: 1.2.0
-```
+**Configurable variables:**
 
-#### GitHub Authentication
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PLATFORM` | `linux/arm64` | Target platform for container builds |
+| `KIND_CLUSTER` | `kind` | Name of the kind cluster |
+| `TAG` | `dev` | Image tag for all services |
+| `REGISTRY` | `ghcr.io/tonedefdev/kerrareg` | Container registry prefix |
 
-For higher rate limits and private repositories, set up GitHub App authentication:
+## Configuration
+
+### GitHub Authentication
+
+For private repositories and to avoid GitHub API rate limits, create a GitHub App and store its credentials as a Kubernetes Secret:
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
   name: kerrareg-github-application-secret
+  namespace: kerrareg-system
 type: Opaque
 data:
   githubAppID: <base64-encoded-app-id>
@@ -415,98 +480,139 @@ data:
   githubPrivateKey: <base64-encoded-private-key>
 ```
 
-## Kubernetes RBAC Setup
+> **Important:** The private key must be base64-encoded **before** being added to the Secret's `data` field (i.e., it is double base64-encoded: once for the PEM content, once by Kubernetes). The controller decodes both layers automatically.
 
-Since Kerrareg is Kubernetes-native, managing access requires setting up appropriate Kubernetes ServiceAccounts and RBAC permissions. This is especially important for CI/CD pipelines that need to create and manage module resources.
-
-### Understanding Kerrareg Resources
-
-Kerrareg defines the following Custom Resources in the `kerrareg.io` API group (v1alpha1):
-
-- **Depot** - Curates modules from external sources based on version constraints
-- **Module** - Represents a Terraform module with version information
-- **Version** - Represents a specific version of a module with metadata and checksums
-
-These resources support the following operations:
-- `create` - Create new resources
-- `update` / `patch` - Modify existing resources
-- `delete` - Remove resources
-- `get` / `list` / `watch` - Read resources
-
-### ServiceAccount for CI/CD Pipelines
-
-For CI/CD pipelines (e.g., GitHub Actions) that need to push module versions to Kerrareg, create a dedicated ServiceAccount with minimal required permissions:
-
-**1. Create a ServiceAccount and associated RBAC resources:**
+Then enable authenticated access in your module config:
 
 ```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: kerrareg-ci-publisher
-  namespace: kerrareg  # or your chosen namespace
-
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: kerrareg-module-publisher
-  namespace: kerrareg
-rules:
-# Permissions for managing Module resources
-- apiGroups: ["kerrareg.io"]
-  resources: ["modules"]
-  verbs: ["create", "update", "patch", "get", "list"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: kerrareg-ci-publisher-binding
-  namespace: kerrareg
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: kerrareg-module-publisher
-subjects:
-- kind: ServiceAccount
-  name: kerrareg-ci-publisher
-  namespace: kerrareg
+githubClientConfig:
+  useAuthenticatedClient: true
 ```
 
-**2. Generate a kubeconfig for the ServiceAccount:**
+### TLS Configuration
 
-```bash
-# Get the ServiceAccount token
-TOKEN=$(kubectl get secret -n kerrareg \
-  $(kubectl get secret -n kerrareg | grep kerrareg-ci-publisher-token | awk '{print $1}') \
-  -o jsonpath='{.data.token}' | base64 --decode)
+#### Direct TLS on the Server
 
-# Get the Kubernetes API server URL
-API_SERVER=$(kubectl cluster-info | grep 'Kubernetes master' | awk '/https/ {print $NF}' | sed 's/$//' )
+Set `server.tls.enabled: true` in your Helm values and provide a TLS Secret named `kerrareg-tls`:
 
-# Create a kubeconfig
-cat > ci-kubeconfig.yaml <<EOF
-apiVersion: v1
-clusters:
-- cluster:
-    server: $API_SERVER
-  name: kerrareg-cluster
-contexts:
-- context:
-    cluster: kerrareg-cluster
-    user: ci-publisher
-  name: ci-context
-current-context: ci-context
-kind: Config
-preferences: {}
-users:
-- name: ci-publisher
-  user:
-    token: $TOKEN
-EOF
+```yaml
+server:
+  tls:
+    enabled: true
+    certPath: /etc/tls/tls.crt
+    keyPath: /etc/tls/tls.key
 ```
 
-**3. Use in GitHub Actions:**
+> **Note:** When TLS is enabled, the server listens on port `443` instead of `8080`. Ensure your Service `targetPort` and any probes are updated accordingly.
+
+> **Note on `anonymousAuth`:** When enabled, the server uses its own ServiceAccount to query the Kubernetes API for Module and Version resources. No client credentials are required. The server's ClusterRole only permits reading `modules` and `versions`, so anonymous users cannot create or modify resources.
+
+#### TLS via Istio Ingress Gateway
+
+For TLS termination at the Istio ingress gateway, enable the Istio VirtualService and create a Gateway resource. The chart's VirtualService references the gateway `istio-ingress/istio-ingress-gateway` by default. See [chart/kerrareg/gateway.yaml](chart/kerrareg/gateway.yaml) for an example, and store your TLS certificate as a Secret in the `istio-ingress` namespace:
+
+```yaml
+server:
+  ingress:
+    istio:
+      enabled: true
+      hosts:
+        - kerrareg.defdev.io
+```
+
+## Usage
+
+### Pull-Based Workflow: Using the Depot
+
+Use the Depot for public or externally maintained modules. The Depot automatically discovers versions from GitHub and manages the full lifecycle.
+
+```yaml
+apiVersion: kerrareg.io/v1alpha1
+kind: Depot
+metadata:
+  name: my-team-depot
+  namespace: kerrareg-system
+spec:
+  global:
+    githubClientConfig:
+      useAuthenticatedClient: true
+    moduleConfig:
+      fileFormat: zip
+      immutable: true
+    storageConfig:
+      s3:
+        bucket: kerrareg-modules
+        region: us-west-2
+  moduleConfigs:
+    - name: terraform-aws-eks
+      provider: aws
+      repoOwner: terraform-aws-modules
+      versionConstraints: ">= 21.10.1, != 21.13.0"
+    - name: terraform-azurerm-aks
+      provider: azurerm
+      repoOwner: azure
+      versionConstraints: ">= 10.0.0"
+  pollingIntervalMinutes: 60
+```
+
+This Depot will:
+
+1. Query the `terraform-aws-modules/terraform-aws-eks` and `azure/terraform-azurerm-aks` GitHub repositories for releases
+2. Filter releases matching the version constraints
+3. Create `Module` resources for each module
+4. The Module controller creates `Version` resources for each discovered version
+5. The Version controller fetches archives from GitHub and uploads them to the S3 bucket
+6. Re-check GitHub for new releases every 60 minutes
+
+**Polling interval:** Set `pollingIntervalMinutes` to have the Depot periodically re-query GitHub for new releases. This is especially useful for public modules where upstream maintainers publish new versions frequently. If omitted, the Depot reconciles once and does not poll.
+
+**Per-module storage override:** Any module can override the global storage config:
+
+```yaml
+moduleConfigs:
+  - name: terraform-aws-eks
+    provider: aws
+    repoOwner: terraform-aws-modules
+    versionConstraints: ">= 21.10.1"
+    storageConfig:
+      azureStorage:
+        accountName: kerraregmodules
+        accountUrl: https://kerraregmodules.blob.core.windows.net
+        subscriptionID: 00000000-0000-0000-0000-000000000000
+        resourceGroup: kerrareg-rg
+```
+
+### Push-Based Workflow: CI/CD Pipeline
+
+For private modules you control, bypass the Depot entirely and create `Module` resources directly from your CI/CD pipeline:
+
+```yaml
+apiVersion: kerrareg.io/v1alpha1
+kind: Module
+metadata:
+  name: terraform-aws-eks
+  namespace: kerrareg-system
+spec:
+  moduleConfig:
+    name: terraform-aws-eks
+    provider: aws
+    repoOwner: terraform-aws-modules
+    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-eks
+    fileFormat: zip
+    immutable: true
+    storageConfig:
+      s3:
+        bucket: kerrareg-modules
+        region: us-west-2
+    githubClientConfig:
+      useAuthenticatedClient: true
+  versions:
+    - version: "21.10.1"
+    - version: "21.11.0"
+    - version: "21.12.0"
+```
+
+**GitHub Actions example:**
 
 ```yaml
 name: Publish Module Version
@@ -519,13 +625,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Build module archive
-        run: |
-          mkdir -p dist
-          # Your build process here (e.g., compress module files)
-          tar czf dist/module-${{ github.ref_name }}.tar.gz .
+      - uses: actions/checkout@v4
 
       - name: Setup kubeconfig
         run: |
@@ -533,210 +633,230 @@ jobs:
           echo "${{ secrets.KERRAREG_KUBECONFIG }}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
 
-      - name: Create or patch Module resource
+      - name: Publish module version
         run: |
           kubectl apply -f - <<EOF
           apiVersion: kerrareg.io/v1alpha1
           kind: Module
           metadata:
-            name: mymodule-aws
-            namespace: kerrareg
+            name: my-module
+            namespace: kerrareg-system
           spec:
             moduleConfig:
-              name: mymodule
+              name: my-module
               provider: aws
-              repoOwner: myorg
-              repoUrl: https://github.com/myorg/terraform-aws-mymodule
+              repoOwner: my-org
+              repoUrl: https://github.com/my-org/terraform-aws-my-module
+              fileFormat: zip
               storageConfig:
                 s3:
-                  bucket: my-module-bucket
+                  bucket: kerrareg-modules
                   region: us-west-2
             versions:
-              - version: ${{ github.ref_name }}
+              - version: ${{ github.event.release.tag_name }}
           EOF
-
-      - name: Upload to S3
-        run: |
-          aws s3 cp dist/module-${{ github.ref_name }}.tar.gz \
-            s3://my-module-bucket/${{ github.ref_name }}/module.tar.gz
 ```
 
-> **Note:** The `kubectl apply` command will create the Module if it doesn't exist, or update it if it does. The Module controller will automatically create Version resources for each version listed in `spec.versions`. The Version controller then handles fetching from GitHub, computing checksums, and uploading to storage.
+The Module controller creates the `Version` resource, and the Version controller fetches the archive from GitHub and uploads it to storage — no manual archive upload needed.
 
-### ServiceAccount for Depot Controllers
+### Adding Versions to an Existing Module
 
-If using the Depot controller, it runs as a built-in ServiceAccount created during deployment. Ensure the Depot has permissions to:
-- Read external GitHub repositories (requires GitHub App authentication via Secrets)
-- Create Module and Version resources
-- Access configured storage backends
+To publish a new version of a module that already exists in Kerrareg, append the version to the `spec.versions` list. Existing versions are preserved — the Module controller only creates `Version` resources for entries it hasn't seen before.
 
-### ServiceAccount for Module and Version Controllers
+**Using `kubectl patch` (quick):**
 
-The Module and Version controllers run as built-in ServiceAccounts created during deployment. They require permissions to:
-- Manage Module and Version resources (create, update, patch, get, list, watch, delete)
-- Read configuration from ConfigMaps and Secrets
-- Manage their own resources within the Kerrareg API group
+```bash
+kubectl patch module terraform-aws-eks -n kerrareg-system \
+  --type json -p '[{"op":"add","path":"/spec/versions/-","value":{"version":"21.13.0"}}]'
+```
 
-## Usage
+**Using `kubectl apply` (declarative):**
 
-Once deployed and configured, Terraform can reference your modules:
+Include all existing versions alongside the new one. The Module controller is idempotent — it won't re-create versions that already exist.
+
+```yaml
+apiVersion: kerrareg.io/v1alpha1
+kind: Module
+metadata:
+  name: terraform-aws-eks
+  namespace: kerrareg-system
+spec:
+  moduleConfig:
+    name: terraform-aws-eks
+    provider: aws
+    repoOwner: terraform-aws-modules
+    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-eks
+    fileFormat: zip
+    storageConfig:
+      s3:
+        bucket: kerrareg-modules
+        region: us-west-2
+  versions:
+    - version: "21.10.1"
+    - version: "21.11.0"
+    - version: "21.12.0"
+    - version: "21.13.0"   # new version
+```
+
+**GitHub Actions example (append on release):**
+
+```yaml
+- name: Add version to existing module
+  run: |
+    VERSION=${{ github.event.release.tag_name }}
+    kubectl patch module my-module -n kerrareg-system \
+      --type json \
+      -p "[{\"op\":\"add\",\"path\":\"/spec/versions/-\",\"value\":{\"version\":\"${VERSION}\"}}]"
+```
+
+**Removing a version:** Remove the entry from `spec.versions` and re-apply. The Module controller garbage-collects orphaned `Version` resources. If `versionHistoryLimit` is set, older versions are automatically pruned when the limit is exceeded.
+
+### Force Re-Sync
+
+If a Module or Version fails to sync (e.g., due to a transient network error), you can force a re-sync by setting `forceSync: true` on the resource:
+
+```bash
+# Force a Module to re-sync all its versions
+kubectl patch module terraform-aws-eks -n kerrareg-system \
+  --type merge -p '{"spec":{"forceSync":true}}'
+
+# Force a single Version to re-sync
+kubectl patch version.kerrareg.io terraform-aws-eks-21.18.0 -n kerrareg-system \
+  --type merge -p '{"spec":{"forceSync":true}}'
+```
+
+The controller resets `forceSync` to `false` after reconciliation completes.
+
+### Migrating to Kerrareg
+
+> **Key feature:** The Depot is designed as a migration tool, not just an ongoing automation. If you're moving from a public registry, a private registry, or any GitHub-hosted module source to Kerrareg, the Depot handles the heavy lifting — discovering versions, downloading archives, and populating your storage backend. Once everything is synced, simply delete the Depot and switch to the [push-based CI/CD workflow](#push-based-workflow-cicd-pipeline). Deleting a Depot **does not** delete the Modules it created, so your registry stays fully intact.
+
+Use the Depot to bulk-import existing modules into Kerrareg:
+
+1. Create a `Depot` with broad version constraints (e.g., `">= 0.0.0"`) to pull in the full release history
+2. Wait for all versions to sync (check `Module` and `Version` status resources)
+3. Update your OpenTofu/Terraform configurations to source modules from Kerrareg
+4. Delete the Depot — all `Module` and `Version` resources remain untouched
+5. Going forward, publish new versions via your CI/CD pipeline using the [push-based workflow](#push-based-workflow-cicd-pipeline)
+
+This pattern lets you adopt Kerrareg incrementally without disrupting existing workflows. The Depot bridges the gap between your current registry and a fully self-hosted solution.
+
+### Consuming Modules
+
+Once modules are synced, reference them in your OpenTofu or Terraform configuration:
 
 ```hcl
-module "vpc" {
-  source = "kerrareg.example.com/myorg/vpc/aws"
-  version = "~> 1.2.0"
-  
-  name = "production-vpc"
-  cidr = "10.0.0.0/16"
+module "eks" {
+  source  = "kerrareg.defdev.io/kerrareg-system/terraform-aws-eks/aws"
+  version = "~> 21.0"
+}
+
+module "aks" {
+  source  = "kerrareg.defdev.io/kerrareg-system/terraform-azurerm-aks/azurerm"
+  version = ">= 10.0.0"
 }
 ```
 
-Terraform will automatically:
-1. Discover your registry using service discovery
-2. Query available versions matching `~> 1.2.0`
-3. Select the latest matching version
-4. Download and extract the module
+The source format is `<registry-host>/<namespace>/<name>/<provider>`, where `<namespace>` is the Kubernetes namespace where the `Module` resource lives.
 
 ## Authenticating with Kerrareg
 
-Kerrareg supports two authentication methods for OpenTofu and Terraform to access your private module registry.
+Kerrareg supports two authentication methods. Both leverage Kubernetes credentials — either a short-lived bearer token or a base64-encoded kubeconfig.
 
-### Method 1: Environment Variables with Kubernetes Access Tokens (Recommended)
+### Method 1: Environment Variables (Recommended)
 
-Use environment variables to pass access tokens to OpenTofu. This method is also supported in Terraform versions > 1.2 and is simpler than credential helpers while maintaining security through token expiration. All versions of OpenTofu support this method.
+Use an environment variable to pass a Kubernetes access token. OpenTofu (all versions) and Terraform (v1.2+) support this method.
 
-**How it works:**
-1. Fetch a fresh access token from your Kubernetes cluster
-2. Set the token as an environment variable in the format `TF_TOKEN_<KERRAREG_HOSTNAME>`
-3. OpenTofu automatically uses the token from the environment variable
-4. Tokens expire after a short period, providing automatic credential rotation
+The variable name is derived from the registry hostname: replace dots with underscores and convert to uppercase.
 
-**Setup Steps:**
+`kerrareg.defdev.io` → `TF_TOKEN_KERRAREG_DEFDEV_IO`
 
-**1. Fetch an access token for the Kubernetes cluster and set the OpenTofu environment variable**:
+**Amazon EKS:**
 
 ```bash
-export TF_TOKEN_KERRAREG_EXAMPLE_COM=$(aws eks get-token --cluster-name your-eks-cluster-name --region us-west-2 --output json | jq -r '.status.token')
-```
+export TF_TOKEN_KERRAREG_DEFDEV_IO=$(aws eks get-token \
+  --cluster-name my-cluster \
+  --region us-west-2 \
+  --output json | jq -r '.status.token')
 
-> **Note:** This example uses Amazon EKS (Elastic Kubernetes Service). You can adapt the token retrieval command based on your Kubernetes distribution (e.g., `gke-gcloud-auth-plugin` for GKE, or your cluster's native authentication method).
-
-> **Note on Environment Variable Format:** The hostname must be converted to a valid environment variable name:
-> - Replace dots (`.`) with underscores (`_`)
-> - Convert to uppercase
-> - Example: `kerrareg.example.com` → `TF_TOKEN_KERRAREG_EXAMPLE_COM`
-> 
-> See [OpenTofu Environment Variable Credentials](https://opentofu.org/docs/cli/config/config-file/#environment-variable-credentials) for more details.
-
-**2. Run OpenTofu:**
-
-```bash
-# Now run your Terraform commands
 tofu init
 tofu plan
-tofu apply
 ```
 
-**3. Use in your Terraform configuration:**
-
-```hcl
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
-
-module "vpc" {
-  source = "kerrareg.example.com/myorg/vpc/aws"
-  version = "~> 1.2.0"
-}
-```
-
-### Method 2: Base64-Encoded Kubeconfig in Credentials File
-
-Use a credentials file with a base64-encoded kubeconfig for direct authentication. This can be useful for local development workstations where a `kind` cluster or local cluster has been deployed, or while developing Kerrareg itself!
-
-> [!NOTE]
-> In order to enable using a kubeconfig you must set the value when deploying the `helm` chart via 
-
-**Setup Steps:**
-
-**1. Get your kubeconfig and encode it:**
+**Google GKE:**
 
 ```bash
-# Get your current kubeconfig
-kubectl config view --raw > /tmp/kubeconfig.yaml
-
-# Base64 encode it
-cat /tmp/kubeconfig.yaml | base64 -w 0 > /tmp/kubeconfig.b64
-
-# Display the encoded value
-cat /tmp/kubeconfig.b64
+export TF_TOKEN_KERRAREG_DEFDEV_IO=$(gcloud auth print-access-token)
 ```
 
-**2. Create or update `~/.terraform.d/credentials.tfrc.json`:**
+**Azure AKS:**
+
+```bash
+export TF_TOKEN_KERRAREG_DEFDEV_IO=$(az account get-access-token \
+  --resource 6dae42f8-4368-4678-94ff-3960e28e3630 \
+  --query accessToken -o tsv)
+```
+
+Tokens are short-lived and automatically rotate, making this the most secure option.
+
+### Method 2: Base64-Encoded Kubeconfig
+
+For development or environments where environment variables are not practical, encode your kubeconfig and store it in a credentials file.
+
+> **Note:** This method requires `server.useBearerToken: false` in your Helm values.
+
+**1. Encode your kubeconfig:**
+
+```bash
+kubectl config view --raw | base64 | tr -d '\n' > /tmp/kubeconfig.b64
+```
+
+**2. Create `~/.terraform.d/credentials.tfrc.json`:**
 
 ```json
 {
   "credentials": {
-    "kerrareg.example.com": {
-      "token": "<BASE64_ENCODED_KUBECONFIG>"
+    "kerrareg.defdev.io": {
+      "token": "<contents-of-kubeconfig.b64>"
     }
   }
 }
 ```
-
-Replace `<BASE64_ENCODED_KUBECONFIG>` with the output from the previous step.
-
-**3. Set proper permissions:**
 
 ```bash
 chmod 600 ~/.terraform.d/credentials.tfrc.json
 ```
 
-**4. Use in your Terraform configuration:**
+### Authentication Comparison
 
-```hcl
-module "vpc" {
-  source = "kerrareg.example.com/myorg/vpc/aws"
-  version = "~> 1.2.0"
-}
-```
+| Feature | Environment Variable | Kubeconfig File |
+|---------|---------------------|-----------------|
+| Token Lifetime | Short-lived (auto-rotating) | Long-lived (manual rotation) |
+| Security | Highest | Good |
+| Setup | Low | Low |
+| Best For | Production, CI/CD | Development |
+| OpenTofu Support | All versions | All versions |
+| Terraform Support | v1.2+ | All versions |
 
-### Authentication Method Comparison
-
-| Feature | Environment Variables | Kubeconfig File |
-|---------|----------------------|-----------------|
-| Token Refresh | Automatic (short-lived) | Manual |
-| Security | Highest (tokens fetched on-demand) | Good (static credentials) |
-| Setup Complexity | Low | Low |
-| Best For | Production environments, CI/CD | Development, legacy systems |
-| Credential Rotation | Automatic | Requires manual update |
-| Long-lived Credentials | No | Yes |
-| Terraform Version | > 1.2 | All versions |
-
-### Using Credentials in CI/CD Environments
-
-**GitHub Actions with Environment Variables (Recommended):**
+### CI/CD Example
 
 ```yaml
 name: Apply Infrastructure
 
-on: [push]
+on:
+  push:
+    branches: [main]
 
 jobs:
   apply:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # Required for OIDC token federation
+      id-token: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::ACCOUNT_ID:role/github-actions-role
           aws-region: us-west-2
@@ -744,95 +864,171 @@ jobs:
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@v1
 
-      - name: Fetch Kubernetes token
+      - name: Set registry token
         run: |
           TOKEN=$(aws eks get-token --cluster-name my-cluster --region us-west-2 --output json | jq -r '.status.token')
-          echo "TF_TOKEN_KERRAREG_EXAMPLE_COM=$TOKEN" >> $GITHUB_ENV
+          echo "TF_TOKEN_KERRAREG_DEFDEV_IO=$TOKEN" >> $GITHUB_ENV
 
-      - name: Tofu Init
-        run: tofu init
-
-      - name: Tofu Plan
-        run: tofu plan
+      - run: tofu init
+      - run: tofu plan
 ```
 
-## Architecture Details
+## Kubernetes RBAC
 
-### Resource Relationships
+The Helm chart creates ServiceAccounts and RBAC resources for each controller automatically when `rbac.create: true` (the default).
+
+### Controller Permissions
+
+| Controller | Resource | Verbs |
+|-----------|----------|-------|
+| Depot | `depots` | create, delete, get, list, patch, update, watch |
+| Depot | `depots/finalizers` | update |
+| Depot | `depots/status` | get, patch, update |
+| Depot | `modules` | create, get, list, patch, update, watch |
+| Depot | `secrets` | get, list, watch |
+| Module | `modules` | create, delete, get, list, patch, update, watch |
+| Module | `modules/finalizers` | update |
+| Module | `modules/status` | get, patch, update |
+| Module | `versions` | create, get, list, patch, update, watch |
+| Version | `modules` | get, list, watch |
+| Version | `modules/status` | get, patch, update |
+| Version | `versions` | create, delete, get, list, patch, update, watch |
+| Version | `versions/finalizers` | update |
+| Version | `versions/status` | get, patch, update |
+| Version | `secrets` | get, list, watch |
+| Server | `versions` | get, list, watch |
+| Server | `modules` | get, list |
+
+### CI/CD ServiceAccount
+
+For CI/CD pipelines that need to create or update `Module` resources:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kerrareg-ci-publisher
+  namespace: kerrareg-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kerrareg-module-publisher
+  namespace: kerrareg-system
+rules:
+  - apiGroups: ["kerrareg.io"]
+    resources: ["modules"]
+    verbs: ["create", "update", "patch", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kerrareg-ci-publisher-binding
+  namespace: kerrareg-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kerrareg-module-publisher
+subjects:
+  - kind: ServiceAccount
+    name: kerrareg-ci-publisher
+    namespace: kerrareg-system
+```
+
+## API Reference
+
+### Service Discovery
 
 ```
-Depot
-  └─ ModuleConfig (list)
-       └─ Module (created by Depot controller)
-            └─ Version (list, created by Module controller)
-                 └─ Version status (checksum, sync status, GitHub fetch, storage upload)
+GET /.well-known/terraform.json
 ```
 
-### Kubernetes API Resources
+**Response:**
 
-Kerrareg defines the following Kubernetes Custom Resources:
+```json
+{
+  "modules.v1": "/kerrareg/modules/v1/"
+}
+```
 
-- **Depot**: Represents a collection of modules with shared configuration
-- **Module**: Represents a specific module (namespace/name/system combination)
-- **Version**: Represents a specific version of a module or provider
+### List Module Versions
 
-### Event Flow
+```
+GET /kerrareg/modules/v1/{namespace}/{name}/{system}/versions
+```
 
-1. **User creates a Depot** → Depot controller processes ModuleConfigs
-2. **Depot controller creates Modules** → Triggered for each ModuleConfig, resolves version constraints
-3. **Module controller creates Versions** → One for each requested version, generates metadata
-4. **Version controller syncs** (Core work):
-   - Fetches module source from GitHub at specified version
-   - Prepares module into distribution archive
-   - Computes SHA256 checksum
-   - Uploads to storage backend (S3, Azure, or filesystem)
-   - Updates Version resource with metadata
-5. **Server queries Kubernetes API** → Retrieves Version data for registry protocol endpoints
-6. **Terraform queries Server** → Gets versions or download URL from server
+Returns all available versions of a module. Requires authentication.
+
+**Path Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `namespace` | Kubernetes namespace of the Module resource |
+| `name` | Module name |
+| `system` | Provider (e.g., `aws`, `azurerm`) |
+
+### Download Module
+
+```
+GET /kerrareg/modules/v1/{namespace}/{name}/{system}/{version}/download
+```
+
+Returns `204 No Content` with an `X-Terraform-Get` header pointing to the storage-specific download URL. Requires authentication.
+
+### Storage Download Endpoints
+
+These endpoints are called by OpenTofu/Terraform after receiving the `X-Terraform-Get` redirect. They validate the SHA256 checksum and stream the module archive.
+
+```
+GET /kerrareg/modules/v1/download/s3/{bucket}/{region}/{name}/{fileName}?fileChecksum={checksum}
+GET /kerrareg/modules/v1/download/azure/{subID}/{rg}/{account}/{accountUrl}/{name}/{fileName}?fileChecksum={checksum}
+GET /kerrareg/modules/v1/download/gcs/{bucket}/{name}/{fileName}?fileChecksum={checksum}
+GET /kerrareg/modules/v1/download/fileSystem/{directory}/{name}/{fileName}?fileChecksum={checksum}
+```
 
 ## Version Constraints
 
-Kerrareg supports all Terraform/OpenTofu version constraint syntax:
+Kerrareg supports all standard OpenTofu/Terraform version constraint syntax:
 
-- Exact version: `1.2.0`
-- Greater than/less than: `>= 1.0.0, < 2.0.0`
-- Pessimistic constraint: `~> 1.2.0` (allows bugfix updates only)
-- Wildcard: `1.*`
-- Multiple constraints: `>= 1.0.0, < 2.0.0, != 1.5.0`
+| Syntax | Example | Meaning |
+|--------|---------|---------|
+| Exact | `1.2.0` | Only version 1.2.0 |
+| Comparison | `>= 1.0.0, < 2.0.0` | Any 1.x version |
+| Pessimistic | `~> 1.2.0` | >= 1.2.0, < 1.3.0 (bugfixes only) |
+| Pessimistic (minor) | `~> 1.2` | >= 1.2.0, < 2.0.0 |
+| Exclusion | `>= 1.0.0, != 1.5.0` | Any 1.x except 1.5.0 |
 
 ## Project Structure
 
 ```
 kerrareg/
-├── api/v1alpha1/          # Kubernetes CRD definitions
-│   ├── types.go           # Resource schemas (Depot, Module, Version, etc.)
-│   └── groupversion_info.go
+├── api/v1alpha1/              # CRD type definitions
+│   ├── types.go               # Depot, Module, Version, StorageConfig schemas
+│   └── groupversion_info.go   # API group registration
+├── chart/kerrareg/            # Helm chart
+│   ├── Chart.yaml
+│   ├── values.yaml
+│   ├── crds/                  # CRD manifests
+│   └── templates/             # Deployment, RBAC, Service templates
 ├── pkg/
-│   ├── storage/           # Storage backend implementations (used by Version service)
-│   │   ├── s3.go
-│   │   ├── azure.go
-│   │   ├── filesystem.go
-│   │   └── storage.go
-│   └── github/            # GitHub API interactions
+│   ├── github/                # GitHub API client (App auth, archive fetching)
+│   │   └── github.go
+│   └── storage/               # Storage backend implementations
+│       ├── storage.go         # Storage interface definition
+│       ├── aws.go             # Amazon S3
+│       ├── azure.go           # Azure Blob Storage
+│       ├── gcp.go             # Google Cloud Storage
+│       ├── filesystem.go      # Local filesystem
+│       └── types/             # StorageObjectInput, StorageMethod
 ├── services/
-│   ├── server/            # Registry Protocol API
-│   │   └── main.go
-│   ├── version/           # Version controller (CORE) - Fetches from GitHub, stores in backends
-│   │   ├── cmd/
-│   │   └── config/
-│   ├── module/            # Module controller - Orchestrates version creation
-│   │   ├── cmd/
-│   │   └── config/
-│   └── depot/             # Depot controller - Resolves version constraints
-│       ├── cmd/
-│       └── config/
-└── README.md              # This file
+│   ├── server/                # Registry Protocol API (HTTP server)
+│   ├── version/               # Version controller (core — fetch & store)
+│   ├── module/                # Module controller (version lifecycle)
+│   └── depot/                 # Depot controller (GitHub discovery)
+├── Makefile                   # Build, load, deploy targets
+└── go.work                    # Go workspace (multi-module)
 ```
-
-## Support and Development
-
-For issues, feature requests, or contributions, please refer to the project repository.
 
 ## License
 
-See LICENSE file for details.
+Apache License 2.0. See [LICENSE](LICENSE) for details.

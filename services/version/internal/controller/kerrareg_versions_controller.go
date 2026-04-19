@@ -195,7 +195,13 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	var githubClientConfig *kerraregGithub.GithubClientConfig
 	if version.Spec.ModuleConfigRef.Name != nil {
 		var githubClient *github.Client
-		if version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient {
+
+		useAuthClient := false
+		if version.Spec.ModuleConfigRef.GithubClientConfig != nil {
+			useAuthClient = version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient
+		}
+
+		if useAuthClient {
 			githubClientConfig, err = kerraregGithub.GetGithubApplicationSecret(ctx, r.Client, version.Namespace)
 			if err != nil {
 				r.Log.Error(err, "Unable to retrieve Github Application secret",
@@ -206,7 +212,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			}
 		}
 
-		authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, version.Spec.ModuleConfigRef.GithubClientConfig.UseAuthenticatedClient, githubClientConfig)
+		authGithubClient, err := kerraregGithub.CreateGithubClient(ctx, useAuthClient, githubClientConfig)
 		if err != nil {
 			r.Log.Error(err, "Unable to create authenticated Github client",
 				"version", version.Spec.Version,
@@ -245,7 +251,7 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 		// If Module is immutable, the checksum field is non-nil, and the calculated checksum between
 		// the Github archive and the version stored in the resource's status do not match - stop processing, update status, and requeue.
-		if *version.Spec.ModuleConfigRef.Immutable && version.Status.Checksum != nil && *version.Status.Checksum != *archiveChecksum {
+		if version.Spec.ModuleConfigRef.Immutable != nil && *version.Spec.ModuleConfigRef.Immutable && version.Status.Checksum != nil && *version.Status.Checksum != *archiveChecksum {
 			statusMsg := fmt.Errorf("Version is marked immutable: archive checksum doesn't match spec: got '%s'", *archiveChecksum)
 			r.Log.Error(statusMsg, "checksum mismatch", "versionName", version.Name, "version", version.Spec.Version)
 
@@ -275,7 +281,9 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// Get the checksum of the object from the storage system
 		// and set its value in soi receiver's ObjectChecksum field
 		soi.Method = types.Get
-		_ = r.InitStorageFactory(ctx, soi)
+		if err = r.InitStorageFactory(ctx, soi); err != nil {
+			return ctrl.Result{}, err
+		}
 	} else {
 		soi.Method = types.Put
 		r.Log.V(5).Info("No checksum status: reconciling object",
@@ -333,15 +341,17 @@ func (r *KerraregReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			return err
 		}
 
-		version.Status.Synced = true
-		version.Status.Checksum = archiveChecksum
-		version.Status.SyncStatus = "Successfully synced version"
+		currentVersion.Status.Synced = true
+		currentVersion.Status.Checksum = archiveChecksum
+		currentVersion.Status.SyncStatus = "Successfully synced version"
 
-		err = r.Status().Update(ctx, version, &client.SubResourceUpdateOptions{
+		if err := r.Status().Update(ctx, &currentVersion, &client.SubResourceUpdateOptions{
 			UpdateOptions: client.UpdateOptions{
 				FieldManager: kerraregControllerName,
 			},
-		})
+		}); err != nil {
+			return err
+		}
 
 		return nil
 	}); err != nil {
@@ -417,6 +427,38 @@ func (r *KerraregReconciler) InitStorageFactory(ctx context.Context, soi *types.
 		storageInterface = amazonS3Storage
 		err = RunStorageFactory(ctx, storageInterface, soi)
 		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	if soi.Version.Spec.ModuleConfigRef.StorageConfig.AzureStorage != nil {
+		azureBlobStorage := &storage.AzureBlobStorage{}
+		err := azureBlobStorage.NewClients(
+			soi.Version.Spec.ModuleConfigRef.StorageConfig.AzureStorage.SubscriptionID,
+			soi.Version.Spec.ModuleConfigRef.StorageConfig.AzureStorage.AccountUrl,
+		)
+		if err != nil {
+			return err
+		}
+
+		storageInterface = azureBlobStorage
+		if err = RunStorageFactory(ctx, storageInterface, soi); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	if soi.Version.Spec.ModuleConfigRef.StorageConfig.GCS != nil {
+		gcsStorage := &storage.GoogleCloudStorage{}
+		if err := gcsStorage.NewClient(ctx); err != nil {
+			return err
+		}
+
+		storageInterface = gcsStorage
+		if err := RunStorageFactory(ctx, storageInterface, soi); err != nil {
 			return err
 		}
 

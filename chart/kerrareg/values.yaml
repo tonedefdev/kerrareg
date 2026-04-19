@@ -7,7 +7,7 @@ global:
   namespace: kerrareg-system
   imagePullPolicy: IfNotPresent
   image:
-    tag: latest
+    tag: dev
 
 ## Version Service (Core - handles GitHub fetching and storage)
 version:
@@ -64,6 +64,8 @@ depot:
 server:
   enabled: true
   replicaCount: 1
+  anonymousAuth: false
+  useBearerToken: true
   image:
     repository: ghcr.io/tonedefdev/kerrareg/server
   service:
@@ -76,6 +78,7 @@ server:
       enabled: true
       hosts:
       - kerrareg.defdev.io
+      gateway: ""
     hosts:
       - host: kerrareg.defdev.io
         paths:
@@ -113,3 +116,17 @@ serviceAccount:
 rbac:
   # Create RBAC roles and role bindings
   create: true
+
+## Storage configuration
+storage:
+  filesystem:
+    # Enable shared volume for filesystem-based module storage
+    enabled: false
+    # Mount path inside containers (used by both server and version-controller)
+    mountPath: /data/modules
+    # Use a hostPath volume instead of a PVC (for local development with kind)
+    hostPath: ""
+    # StorageClass must support ReadWriteMany access mode (ignored when hostPath is set)
+    storageClassName: ""
+    # Size of the PersistentVolumeClaim (ignored when hostPath is set)
+    size: 10Gi

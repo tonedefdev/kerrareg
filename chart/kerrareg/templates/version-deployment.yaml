@@ -21,17 +21,52 @@ spec:
     spec:
       serviceAccountName: version-controller
       securityContext:
+        {{- if not (and .Values.storage.filesystem.enabled .Values.storage.filesystem.hostPath) }}
         runAsNonRoot: true
+        {{- end }}
         runAsUser: 65532
+        {{- if .Values.storage.filesystem.enabled }}
+        fsGroup: 65532
+        {{- end }}
+      {{- if and .Values.storage.filesystem.enabled .Values.storage.filesystem.hostPath }}
+      initContainers:
+      - name: fix-permissions
+        image: busybox:1.37
+        command: ["sh", "-c", "chown -R 65532:65532 {{ .Values.storage.filesystem.mountPath }}"]
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+        - name: modules
+          mountPath: {{ .Values.storage.filesystem.mountPath }}
+      {{- end }}
       containers:
       - name: version-controller
         image: "{{ .Values.version.image.repository }}:{{ .Values.global.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         securityContext:
           allowPrivilegeEscalation: false
+          {{- if not .Values.storage.filesystem.enabled }}
           readOnlyRootFilesystem: true
+          {{- end }}
         resources:
           {{- toYaml .Values.version.resources | nindent 10 }}
+        {{- if .Values.storage.filesystem.enabled }}
+        volumeMounts:
+        - name: modules
+          mountPath: {{ .Values.storage.filesystem.mountPath }}
+        {{- end }}
+      {{- if .Values.storage.filesystem.enabled }}
+      volumes:
+      - name: modules
+        {{- if .Values.storage.filesystem.hostPath }}
+        hostPath:
+          path: {{ .Values.storage.filesystem.hostPath }}
+          type: DirectoryOrCreate
+        {{- else }}
+        persistentVolumeClaim:
+          claimName: kerrareg-modules
+        {{- end }}
+      {{- end }}
       {{- with .Values.version.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

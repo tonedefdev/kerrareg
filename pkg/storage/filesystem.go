@@ -18,10 +18,10 @@ type FileSystem struct{}
 func (storage *FileSystem) fileExists(filename string) (bool, error) {
 	_, err := os.Stat(filename)
 	if err == nil {
-		return true, err
+		return true, nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		return false, err
+		return false, nil
 	}
 
 	return false, err
@@ -92,7 +92,7 @@ func (storage *FileSystem) PutObject(ctx context.Context, soi *types.StorageObje
 	}
 
 	if !exists {
-		if err := os.Mkdir(dir, os.FileMode(0644)); err != nil {
+		if err := os.MkdirAll(dir, os.FileMode(0755)); err != nil {
 			return err
 		}
 	}
