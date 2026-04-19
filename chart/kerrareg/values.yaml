@@ -7,7 +7,7 @@ global:
   namespace: kerrareg-system
   imagePullPolicy: IfNotPresent
   image:
-    tag: dev
+    tag: 1.0.0-rc1
 
 ## Version Service (Core - handles GitHub fetching and storage)
 version:
@@ -78,7 +78,7 @@ server:
       enabled: true
       hosts:
       - kerrareg.defdev.io
-      gateway: ""
+      gateway: istio-ingress/istio-ingress-gateway
     hosts:
       - host: kerrareg.defdev.io
         paths:
