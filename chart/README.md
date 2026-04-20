@@ -64,11 +64,6 @@ templates/
 ├── server-service.yaml               # Server Service
 ├── server-ingress.yaml               # Server Ingress (optional)
 └── server-poddisruptionbudget.yaml   # Server PDB (optional)
-
-examples/
-├── development.yaml                  # Development deployment config
-├── production-with-depot.yaml        # Production with Depot
-└── production-push-based.yaml        # Production with push-based CI
 ```
 
 ## Features
@@ -95,6 +90,13 @@ examples/
 - `server.ingress.enabled` - Enable Ingress for external access
 - `server.tls.enabled` - Enable TLS (requires kerrareg-tls secret)
 - `server.podDisruptionBudget.enabled` - Enable for high availability
+
+### RBAC Scope
+
+- `rbac.create` - Create RBAC roles and bindings (default: `true`)
+- `rbac.scopeToNamespace` - Use namespace-scoped `Role`/`RoleBinding` instead of `ClusterRole`/`ClusterRoleBinding` (default: `false`)
+
+When `rbac.scopeToNamespace` is `true`, controllers only watch resources in `global.namespace` and RBAC is limited to that namespace. This is useful for multi-tenant clusters or environments where cluster-wide permissions are unavailable.
 
 ### Resource Management
 
@@ -137,6 +139,16 @@ helm install kerrareg ./kerrareg \
   -f kerrareg/examples/production-push-based.yaml
 ```
 
+### Scenario 4: Namespace-Scoped Mode
+
+```bash
+helm install kerrareg ./kerrareg \
+  -n kerrareg-system --create-namespace \
+  --set rbac.scopeToNamespace=true
+```
+
+This restricts all RBAC and controller watches to `global.namespace`, avoiding the need for cluster-wide permissions.
+
 ## Troubleshooting
 
 ### Check deployment status:
@@ -165,8 +177,13 @@ kubectl logs -n kerrareg -l app=server
 ### Verify RBAC:
 
 ```bash
+# Cluster-scoped (default)
 kubectl get clusterroles | grep kerrareg
 kubectl get clusterrolebindings | grep kerrareg
+
+# Namespace-scoped (rbac.scopeToNamespace: true)
+kubectl get roles -n kerrareg-system
+kubectl get rolebindings -n kerrareg-system
 ```
 
 ## Next Steps
