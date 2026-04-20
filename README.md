@@ -62,6 +62,14 @@ Kerrareg is **declarative**. You describe the modules and versions you want, and
 
 This is the same operational model that makes Kubernetes itself reliable, applied to your module registry.
 
+### Tamper-Resistant Checksums
+
+Most registries compute a checksum when a module is uploaded and verify it on download — but that single point of validation leaves a window for tampering. If someone replaces the artifact in storage, the registry has no way to detect the change.
+
+Kerrareg takes a stronger approach. When a Version controller first discovers a module artifact, it computes the checksum and writes it to the Version resource's **`.status`** field. Kubernetes exposes status as a separate subresource (`versions/status`), and Kerrareg's RBAC only grants write access to the Version controller's ServiceAccount — users, CI pipelines, and `kubectl edit` cannot modify it unless explicitly given access to it. On every subsequent reconciliation, the controller compares the storage artifact's checksum against this recorded status value. If the checksums diverge, the controller flags the version as tampered and refuses to serve it.
+
+This means an attacker who gains write access to your storage backend still can't silently swap a module archive. The checksum of record lives in the Kubernetes API, is protected by Kubernetes RBAC, and is verified continuously — not just once at upload time.
+
 ### How Kerrareg Compares
 
 | Feature | Kerrareg | Terrareg | Tapir |
@@ -306,7 +314,8 @@ Stores module archives on a shared volume mounted to both the Version controller
 | `storage.filesystem.storageClassName` | `""` | StorageClass for the PVC (must support `ReadWriteMany`) |
 | `storage.filesystem.size` | `10Gi` | PVC size |
 
-> **Important:** Set `directoryPath` in your CRD to match the `storage.filesystem.mountPath` Helm value (default `/data/modules`).
+> [!NOTE]
+> Set `directoryPath` in your CRD to match the `storage.filesystem.mountPath` Helm value (default `/data/modules`).
 
 **Local Development with kind (hostPath):**
 
@@ -588,7 +597,7 @@ sudo update-ca-certificates
 Apply the Istio Gateway resource:
 
 ```bash
-kubectl apply -f chart/kerrareg/gateway.yaml
+kubectl apply -f chart/kerrareg/istio/gateway.yaml
 ```
 
 Add a `/etc/hosts` entry so the hostname resolves locally (you'll update the IP in Step 6):
@@ -688,12 +697,18 @@ Once the status shows `Synced`, the module archive has been fetched from GitHub 
 
 ### Step 8: Use the Registry with OpenTofu
 
-Create a test configuration:
+Fetch the port that `cloud-kind-provider` will use to forward traffic:
+
+```bash
+docker ps --filter "name=kindccm" --format '{{.Ports}}' | sed -n 's/.*:\([0-9]*\)->443.*/\1/p'
+```
+
+Create a test configuration with the port number added from the previous command:
 
 ```hcl
 # main.tf
 module "eks" {
-  source  = "kerrareg.defdev.io/kerrareg-system/terraform-aws-eks/aws"
+  source  = "kerrareg.defdev.io:{CLOUD_PROVIDER_KIND_PORT}/kerrareg-system/terraform-aws-eks/aws"
   version = "21.10.1"
 }
 ```
@@ -749,7 +764,7 @@ mkdir -p ~/.terraform.d && cat > ~/.terraform.d/credentials.tfrc.json <<EOF
 }
 EOF
 ```
-> [!NOTE]
+> [!IMPORTANT]
 > Because `cloud-provider-kind` assigns a non-standard port (not `443`), you must use a `credentials.tfrc.json` file for authentication. The `TF_TOKEN_` environment variable approach does not support hostnames with port numbers.
 
 OpenTofu sends the bearer token to Kerrareg, which forwards it to the Kubernetes API for authentication and RBAC authorization. This is the same flow used in production — no separate user database or API keys required.
@@ -827,8 +842,8 @@ data:
   githubInstallID: <base64-encoded-install-id>
   githubPrivateKey: <base64-encoded-private-key>
 ```
-
-> **Important:** The private key must be base64-encoded **before** being added to the Secret's `data` field (i.e., it is double base64-encoded: once for the PEM content, once by Kubernetes). The controller decodes both layers automatically.
+> [!IMPORTANT]
+> The private key must be base64-encoded **before** being added to the Secret's `data` field (i.e., it is double base64-encoded: once for the PEM content, once by Kubernetes). The controller decodes both layers automatically.
 
 Then enable authenticated access in your module config:
 
@@ -850,10 +865,11 @@ server:
     certPath: /etc/tls/tls.crt
     keyPath: /etc/tls/tls.key
 ```
-
+> [!NOTE]
 > **Note:** When TLS is enabled, the server listens on port `443` instead of `8080`. Ensure your Service `targetPort` and any probes are updated accordingly.
 
-> **Note on `anonymousAuth`:** When enabled, the server uses its own ServiceAccount to query the Kubernetes API for Module and Version resources. No client credentials are required. The server's ClusterRole only permits reading `modules` and `versions`, so anonymous users cannot create or modify resources.
+> [!NOTE]
+> `anonymousAuth`:** When enabled, the server uses its own ServiceAccount to query the Kubernetes API for Module and Version resources. No client credentials are required. The server's ClusterRole only permits reading `modules` and `versions`, so anonymous users cannot create or modify resources.
 
 #### TLS via Istio Ingress Gateway
 
@@ -1154,7 +1170,8 @@ Tokens are short-lived and automatically rotate, making this the most secure opt
 
 For development or environments where environment variables are not practical, encode your kubeconfig and store it in a credentials file.
 
-> **Note:** This method requires `server.useBearerToken: false` in your Helm values.
+> [!NOTE]
+> This method requires `server.useBearerToken: false` in your Helm values.
 
 **1. Encode your kubeconfig:**
 
