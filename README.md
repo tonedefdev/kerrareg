@@ -27,6 +27,7 @@ Compatible with **OpenTofu** (all versions) and **Terraform** (v1.2+).
 - [Authenticating with Kerrareg](#authenticating-with-kerrareg)
 - [Kubernetes RBAC](#kubernetes-rbac)
 - [API Reference](#api-reference)
+- [Internal Developer Portal Example](#internal-developer-portal-example)
 - [Version Constraints](#version-constraints)
 - [Project Structure](#project-structure)
 - [License](#license)
@@ -1445,6 +1446,29 @@ GET /kerrareg/modules/v1/download/gcs/{bucket}/{name}/{fileName}?fileChecksum={c
 GET /kerrareg/modules/v1/download/fileSystem/{directory}/{name}/{fileName}?fileChecksum={checksum}
 ```
 
+## Internal Developer Portal Example
+
+An example React + Material UI Internal Developer Portal is included at [examples/internal-developer-portal](examples/internal-developer-portal).
+
+It visualizes the Kubernetes-native Kerrareg resource graph:
+
+- `Depot` -> managed `Module` resources -> generated `Version` resources
+
+The example uses a small Node API with `@kubernetes/client-node` to read CRDs directly from the cluster and supports both:
+
+- local development using kubeconfig (great for `kind`)
+- in-cluster deployment using ServiceAccount credentials
+
+Quick start:
+
+```bash
+cd examples/internal-developer-portal
+npm install
+npm run dev
+```
+
+Then open `http://localhost:5173`.
+
 ## Version Constraints
 
 Kerrareg supports all standard OpenTofu/Terraform version constraint syntax:
@@ -1469,6 +1493,8 @@ kerrareg/
 │   ├── values.yaml
 │   ├── crds/                  # CRD manifests
 │   └── templates/             # Deployment, RBAC, Service templates
+├── examples/
+│   └── internal-developer-portal/ # React + MUI demo portal for Depot->Module->Version visualization
 ├── pkg/
 │   ├── github/                # GitHub API client (App auth, archive fetching)
 │   │   └── github.go

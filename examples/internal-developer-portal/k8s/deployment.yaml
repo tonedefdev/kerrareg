@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kerrareg-portal
+  namespace: kerrareg-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kerrareg-portal
+  template:
+    metadata:
+      labels:
+        app: kerrareg-portal
+    spec:
+      serviceAccountName: kerrareg-portal
+      containers:
+        - name: portal
+          image: ghcr.io/tonedefdev/kerrareg/portal:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KERRAREG_NAMESPACE
+              value: kerrareg-system
+            - name: KERRAREG_K8S_AUTH_MODE
+              value: incluster
+            - name: PORT
+              value: "8081"
+          ports:
+            - containerPort: 8081
+              name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kerrareg-portal
+  namespace: kerrareg-system
+spec:
+  selector:
+    app: kerrareg-portal
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP
