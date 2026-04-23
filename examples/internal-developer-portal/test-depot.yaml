@@ -1,0 +1,45 @@
+apiVersion: v1
+items:
+- apiVersion: kerrareg.io/v1alpha1
+  kind: Depot
+  metadata:
+    creationTimestamp: "2026-04-22T05:47:49Z"
+    generation: 5
+    name: kerrareg-depot
+    namespace: default
+    resourceVersion: "5684063"
+    uid: 253098b3-f490-4043-a605-fe1e51f853f1
+  spec:
+    global:
+      githubClientConfig:
+        useAuthenticatedClient: true
+      storageConfig:
+        fileSystem:
+          directoryPath: /data/modules
+    moduleConfigs:
+    - fileFormat: tar
+      name: terraform-aws-eks
+      provider: aws
+      repoOwner: terraform-aws-modules
+      repoUrl: https://github.com/terraform-aws-modules/terraform-aws-eks
+      versionConstraints: '>= v21.17.0'
+    - fileFormat: tar
+      name: terraform-azurerm-aks
+      provider: azurerm
+      repoOwner: azure
+      repoUrl: https://github.com/azure/terraform-azurerm-aks
+      versionConstraints: '>= 6.0.0'
+    - fileFormat: tar
+      name: terraform-google-kubernetes-engine
+      provider: google
+      repoOwner: terraform-google-modules
+      repoUrl: https://github.com/terraform-google-modules/terraform-google-kubernetes-engine
+      versionConstraints: ~> v26.0.0
+  status:
+    modules:
+    - terraform-aws-eks
+    - terraform-azurerm-aks
+    - terraform-google-kubernetes-engine
+kind: List
+metadata:
+  resourceVersion: ""
