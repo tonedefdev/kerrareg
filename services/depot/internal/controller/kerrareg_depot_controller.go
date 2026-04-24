@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -152,39 +151,28 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 					return ctrl.Result{}, fmt.Errorf("releases was nil")
 				}
 
-				for _, constraint := range constraints {
-					for _, release := range releases {
-						version, err := version.NewVersion(*release.TagName)
-						if err != nil {
-							r.Log.Error(err, "Unable to create new go-version")
-							return ctrl.Result{}, err
-						}
-
-						constraintString := strings.TrimSpace(constraint.String())
-						if constraint.Check(version) {
-							if strings.HasPrefix(constraintString, `>=`) || strings.HasPrefix(constraintString, `<=`) || strings.HasPrefix(constraintString, `~>`) {
-								if slices.Contains(matchedVersions, version.String()) {
-									continue
-								}
-
-								matchedVersions = append(matchedVersions, version.String())
-							}
-						} else {
-							if strings.HasPrefix(constraintString, `!=`) {
-								if !slices.Contains(matchedVersions, version.String()) {
-									continue
-								}
-
-								i := slices.Index(matchedVersions, version.String())
-								if i == -1 {
-									continue
-								}
-
-								matchedVersions = slices.Delete(matchedVersions, i, i+1)
-								break
-							}
-						}
+				for _, release := range releases {
+					if release.TagName == nil {
+						continue
 					}
+
+					releaseVersion, err := version.NewVersion(*release.TagName)
+					if err != nil {
+						r.Log.V(5).Info("Skipping non-semver release tag", "tag", *release.TagName)
+						continue
+					}
+
+					// Constraints returned from version.NewConstraint use AND semantics,
+					// so a release must satisfy the full expression (e.g. >=6.0.0, <=7.0.0).
+					if !constraints.Check(releaseVersion) {
+						continue
+					}
+
+					if slices.Contains(matchedVersions, releaseVersion.String()) {
+						continue
+					}
+
+					matchedVersions = append(matchedVersions, releaseVersion.String())
 				}
 
 				if resp.NextPage == 0 {
