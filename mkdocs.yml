@@ -35,6 +35,28 @@ theme:
 
 nav:
   - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Local Quickstart: getting-started/quickstart.md
+  - Architecture: architecture.md
+  - Storage Backends: storage.md
+  - Configuration:
+    - Namespace-Scoped Mode: configuration/namespace.md
+    - GitHub Authentication: configuration/github-auth.md
+    - TLS: configuration/tls.md
+    - GPG Signing: configuration/gpg.md
+  - Guides:
+    - GitOps with Argo CD: guides/gitops.md
+    - Depot (Pull-Based): guides/depot.md
+    - CI/CD (Push-Based): guides/cicd.md
+    - Consuming Modules: guides/modules.md
+    - Consuming Providers: guides/providers.md
+    - Migrating to Kerrareg: guides/migration.md
+  - Authentication: authentication.md
+  - Kubernetes RBAC: rbac.md
+  - Reference:
+    - API: reference/api.md
+    - Version Constraints: reference/version-constraints.md
   - Contributing: contributing.md
   - Helm Chart: helm-chart.md
 
