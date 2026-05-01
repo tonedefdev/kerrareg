@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - docs/**
-      - mkdocs.yaml
+      - mkdocs.yml
       - README.md
       - CONTRIBUTING.md
       - chart/kerrareg/README.md
@@ -36,13 +36,5 @@ jobs:
           cp CONTRIBUTING.md docs/contributing.md
           cp chart/kerrareg/README.md docs/helm-chart.md
 
-      - name: Build site
-        run: mkdocs build --site-dir site
-
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./site
-          destination_dir: docs
-          keep_files: true
+        run: mkdocs gh-deploy --force
