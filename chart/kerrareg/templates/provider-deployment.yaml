@@ -24,7 +24,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 65532
       containers:
-      - name: deployment-controller
+      - name: provider-controller
         image: "{{ .Values.provider.image.repository }}:{{ default .Values.global.image.tag .Values.provider.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         {{- if .Values.rbac.scopeToNamespace }}
