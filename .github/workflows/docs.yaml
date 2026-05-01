@@ -7,7 +7,6 @@ on:
     paths:
       - docs/**
       - mkdocs.yml
-      - README.md
       - CONTRIBUTING.md
       - chart/kerrareg/README.md
 
@@ -32,7 +31,6 @@ jobs:
         run: |
           mkdir -p docs/img
           cp img/kerrareg.svg docs/img/
-          cp README.md docs/index.md
           cp CONTRIBUTING.md docs/contributing.md
           cp chart/kerrareg/README.md docs/helm-chart.md
 

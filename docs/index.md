@@ -1,5 +1,3 @@
-# Kerrareg
-
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/tonedefdev/kerrareg/blob/main/LICENSE)
 [![Helm](https://img.shields.io/badge/Helm_Chart-0.1.0-0F1689?logo=helm&logoColor=white)](https://github.com/tonedefdev/kerrareg/tree/main/chart/kerrareg)
@@ -86,8 +84,8 @@ This means an attacker who gains write access to your storage backend still can'
 | Immutability enforcement | Checksum validated every reconciliation | At upload time only | At upload time only |
 | Air-gapped support | Yes (filesystem backend + PVC) | Yes (filesystem) | Limited |
 
-> [!TIP]
-> If you're already running Kubernetes, Kerrareg gives you a module registry where security, auth, and operations come free — no extra infrastructure, no extra accounts, no extra attack surface.
+!!! tip
+    If you're already running Kubernetes, Kerrareg gives you a module registry where security, auth, and operations come free — no extra infrastructure, no extra accounts, no extra attack surface.
 
 ## How It Works
 
@@ -246,8 +244,8 @@ Automates module and provider discovery. The Depot controller:
 Implements both the Module Registry Protocol and the Provider Registry Protocol as an HTTP API. The server authenticates requests using either Kubernetes bearer tokens or base64-encoded kubeconfigs, then queries the Kubernetes API for module, provider, and version data.
 
 Provider artifact endpoints (binary download, `SHA256SUMS`, `SHA256SUMS.sig`) are served using the server's own ServiceAccount per the [Terraform Provider Registry Protocol](https://developer.hashicorp.com/terraform/internals/provider-registry-protocol) — OpenTofu fetches these URLs without forwarding client credentials, so authentication is provided at the metadata tier rather than the artifact tier.
-> [!IMPORTANT]
-> To prevent unauthenticated users from easily enumerating provider artifacts, provider files are stored with UUID7-based filenames.
+!!! warning
+    To prevent unauthenticated users from easily enumerating provider artifacts, provider files are stored with UUID7-based filenames.
 
 ## Storage Backends
 
@@ -380,8 +378,8 @@ Stores module archives on a shared volume mounted to both the Version controller
 | `storage.filesystem.storageClassName` | `""` | StorageClass for the PVC (must support `ReadWriteMany`) |
 | `storage.filesystem.size` | `10Gi` | PVC size |
 
-> [!NOTE]
-> Set `directoryPath` in your CRD to match the `storage.filesystem.mountPath` Helm value (default `/data/modules`).
+!!! note
+    Set `directoryPath` in your CRD to match the `storage.filesystem.mountPath` Helm value (default `/data/modules`).
 
 **Local Development with kind (hostPath):**
 
@@ -531,8 +529,8 @@ These values apply to `version`, `module`, `depot`, and `provider` independently
 | `<service>.tolerations` | `[]` | Tolerations |
 | `<service>.affinity` | `{}` | Affinity rules |
 
-> [!NOTE]
-> The provider controller is disabled by default (`provider.enabled: false`). Enable it explicitly when you are ready to sync provider binaries — provider archives can be several hundred megabytes each.
+!!! note
+    The provider controller is disabled by default (`provider.enabled: false`). Enable it explicitly when you are ready to sync provider binaries — provider archives can be several hundred megabytes each.
 
 #### GPG Signing (Providers)
 
@@ -609,8 +607,8 @@ make deploy
 
 The fastest way to try Kerrareg is with a local [kind](https://kind.sigs.k8s.io/) cluster using the filesystem storage backend and `hostPath`. This avoids any cloud provider setup — no S3 bucket, no Azure Storage Account, no credentials, no ingress controller, and no TLS certificates. You'll have a fully functional registry in minutes using `kubectl port-forward` and the public `*.localtest.me` DNS service (all `*.localtest.me` hostnames resolve to `127.0.0.1`).
 
-> [!NOTE]
-> OpenTofu and Terraform require module registry hostnames to contain at least one dot. `localhost` alone is not valid. `kerrareg.localtest.me` resolves to `127.0.0.1` via public DNS, making it a convenient dotted hostname for local testing without editing `/etc/hosts` or installing any ingress controller.
+!!! note
+    OpenTofu and Terraform require module registry hostnames to contain at least one dot. `localhost` alone is not valid. `kerrareg.localtest.me` resolves to `127.0.0.1` via public DNS, making it a convenient dotted hostname for local testing without editing `/etc/hosts` or installing any ingress controller.
 
 ### Prerequisites
 
@@ -647,8 +645,8 @@ Verify all pods are running:
 kubectl get pods -n kerrareg-system
 ```
 
-> [!NOTE]
-> **Apple Silicon users:** If building from source, the default `PLATFORM` is `linux/arm64`. For Intel Macs or Linux, run `make deploy PLATFORM=linux/amd64`.
+!!! note
+    **Apple Silicon users:** If building from source, the default `PLATFORM` is `linux/arm64`. For Intel Macs or Linux, run `make deploy PLATFORM=linux/amd64`.
 
 ### Step 3: Port-Forward the Server
 
@@ -697,8 +695,8 @@ spec:
 EOF
 ```
 
-> [!NOTE]
-> The Module CR name (`terraform-aws-key-pair`) must match the GitHub repository name, because the module controller uses it as the repository name when fetching archives if `spec.moduleConfig.name` is omitted.
+!!! note
+    The Module CR name (`terraform-aws-key-pair`) must match the GitHub repository name, because the module controller uses it as the repository name when fetching archives if `spec.moduleConfig.name` is omitted.
 
 Watch the Version resource sync:
 
@@ -984,8 +982,8 @@ data:
   githubInstallID: <base64-encoded-install-id>
   githubPrivateKey: <base64-encoded-private-key>
 ```
-> [!IMPORTANT]
-> The private key must be base64-encoded **before** being added to the Secret's `data` field (i.e., it is double base64-encoded: once for the PEM content, once by Kubernetes). The controller decodes both layers automatically.
+!!! warning
+    The private key must be base64-encoded **before** being added to the Secret's `data` field (i.e., it is double base64-encoded: once for the PEM content, once by Kubernetes). The controller decodes both layers automatically.
 
 Then enable authenticated access in your module config:
 
@@ -1007,11 +1005,11 @@ server:
     certPath: /etc/tls/tls.crt
     keyPath: /etc/tls/tls.key
 ```
-> [!NOTE]
-> When TLS is enabled, the server listens on port `443` instead of `8080`. Ensure your Service `targetPort` and any probes are updated accordingly.
+!!! note
+    When TLS is enabled, the server listens on port `443` instead of `8080`. Ensure your Service `targetPort` and any probes are updated accordingly.
 
-> [!NOTE]
-> When `anonymousAuth` is enabled, the server uses its own ServiceAccount to query the Kubernetes API for Module and Version resources. No client credentials are required. The server's ClusterRole only permits reading `modules` and `versions`, so anonymous users cannot create or modify resources.
+!!! note
+    When `anonymousAuth` is enabled, the server uses its own ServiceAccount to query the Kubernetes API for Module and Version resources. No client credentials are required. The server's ClusterRole only permits reading `modules` and `versions`, so anonymous users cannot create or modify resources.
 
 #### TLS via Istio Ingress Gateway
 
@@ -1081,11 +1079,11 @@ server:
     secretName: kerrareg-provider-gpg
 ```
 
-> [!IMPORTANT]
-> The `KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64` value must be the base64-encoded ASCII armor of the private key (i.e., the PEM-style block is base64-encoded). The server decodes it automatically before signing. Do not store the raw private key directly.
+!!! warning
+    The `KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64` value must be the base64-encoded ASCII armor of the private key (i.e., the PEM-style block is base64-encoded). The server decodes it automatically before signing. Do not store the raw private key directly.
 
-> [!NOTE]
-> The ASCII-armored **public** key (`KERRAREG_PROVIDER_GPG_ASCII_ARMOR`) is returned verbatim in the provider package metadata response so OpenTofu can verify the signature without any out-of-band key exchange. OpenTofu will prompt the user to confirm a new signing key the first time a provider is installed from this registry — this is expected behavior.
+!!! note
+    The ASCII-armored **public** key (`KERRAREG_PROVIDER_GPG_ASCII_ARMOR`) is returned verbatim in the provider package metadata response so OpenTofu can verify the signature without any out-of-band key exchange. OpenTofu will prompt the user to confirm a new signing key the first time a provider is installed from this registry — this is expected behavior.
 
 ## Usage
 
@@ -1166,8 +1164,8 @@ spec:
       selfHeal: true
 ```
 
-> [!TIP]
-> Set `prune: false` so that Argo CD does not delete `Module` resources removed from Git — this prevents accidental module deletion. Use `selfHeal: true` so that any manual drift on the cluster is corrected back to the Git-declared state.
+!!! tip
+    Set `prune: false` so that Argo CD does not delete `Module` resources removed from Git — this prevents accidental module deletion. Use `selfHeal: true` so that any manual drift on the cluster is corrected back to the Git-declared state.
 
 **Why this works well with Kerrareg:**
 
@@ -1181,8 +1179,8 @@ spec:
 
 Use the Depot for public, private, or externally maintained modules. The Depot automatically discovers versions from GitHub and manages the full lifecycle. 
 
-> [!TIP]
-> You can setup GitHub authentication via a GitHub Application to access private repos.
+!!! tip
+    You can setup GitHub authentication via a GitHub Application to access private repos.
 
 ```yaml
 apiVersion: kerrareg.io/v1alpha1
@@ -1402,8 +1400,8 @@ The controller resets `forceSync` to `false` after reconciliation completes.
 
 ### Migrating to Kerrareg
 
-> [!TIP]
-> The Depot is designed as a migration tool, not just an ongoing automation. Whether you're moving modules from a public or private GitHub-hosted source, or migrating providers away from the public HashiCorp registry, the Depot handles the heavy lifting — discovering versions, downloading archives, and populating your storage backend. Once everything is synced, simply delete the Depot and switch to the [push-based CI/CD workflow](#push-based-workflow-cicd-pipeline). Deleting a Depot **does not** delete the Modules or Providers it created, so your registry stays fully intact.
+!!! tip
+    The Depot is designed as a migration tool, not just an ongoing automation. Whether you're moving modules from a public or private GitHub-hosted source, or migrating providers away from the public HashiCorp registry, the Depot handles the heavy lifting — discovering versions, downloading archives, and populating your storage backend. Once everything is synced, simply delete the Depot and switch to the [push-based CI/CD workflow](#push-based-workflow-cicd-pipeline). Deleting a Depot **does not** delete the Modules or Providers it created, so your registry stays fully intact.
 
 **Migrating modules** — Use the Depot to bulk-import existing modules into Kerrareg:
 
@@ -1495,8 +1493,8 @@ export TF_TOKEN_KERRAREG_DEFDEV_IO=$(aws eks get-token \
 tofu init
 ```
 
-> [!NOTE]
-> Provider artifact downloads (the binary, `SHA256SUMS`, and `SHA256SUMS.sig`) do not require client authentication. OpenTofu fetches these URLs after receiving the download metadata from the auth-protected `download` endpoint, and the Terraform Provider Registry Protocol does not forward credentials to artifact URLs. The server uses its own ServiceAccount for these requests. Security is enforced at the metadata tier where the download URL is issued.
+!!! note
+    Provider artifact downloads (the binary, `SHA256SUMS`, and `SHA256SUMS.sig`) do not require client authentication. OpenTofu fetches these URLs after receiving the download metadata from the auth-protected `download` endpoint, and the Terraform Provider Registry Protocol does not forward credentials to artifact URLs. The server uses its own ServiceAccount for these requests. Security is enforced at the metadata tier where the download URL is issued.
 
 **Adding a new provider version**
 
@@ -1560,8 +1558,8 @@ Tokens are short-lived and automatically rotate, making this the most secure opt
 
 For development or environments where environment variables are not practical, encode your kubeconfig and store it in a credentials file.
 
-> [!NOTE]
-> This method requires `server.useBearerToken: false` in your Helm values.
+!!! note
+    This method requires `server.useBearerToken: false` in your Helm values.
 
 **1. Encode your kubeconfig:**
 
