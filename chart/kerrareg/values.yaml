@@ -92,7 +92,7 @@ server:
   ingress:
     enabled: false
     istio:
-      enabled: true
+      enabled: false
       hosts:
       - kerrareg.defdev.io
       gateway: istio-ingress/istio-ingress-gateway
