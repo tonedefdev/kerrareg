@@ -1,5 +1,5 @@
 /*
-Copyright 2026 Anthony Owens.
+Copyright 2026 Tony Owens.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -229,4 +229,3 @@ spec:
 		}, 2*time.Minute, 5*time.Second).Should(Succeed())
 	})
 })
-

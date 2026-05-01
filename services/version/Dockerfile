@@ -11,6 +11,7 @@ COPY api/v1alpha1/go.mod api/v1alpha1/go.sum api/v1alpha1/
 COPY pkg/storage/go.mod pkg/storage/go.sum pkg/storage/
 COPY pkg/github/go.mod pkg/github/go.sum pkg/github/
 COPY pkg/utils/go.mod pkg/utils/
+COPY pkg/testutils/go.mod pkg/testutils/
 COPY services/version/go.mod services/version/go.sum services/version/
 COPY services/depot/go.mod services/depot/go.sum services/depot/
 COPY services/module/go.mod services/module/go.sum services/module/

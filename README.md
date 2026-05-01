@@ -36,9 +36,9 @@ Compatible with **OpenTofu** (all versions) and **Terraform** (v1.2+).
 
 ## Why Kerrareg?
 
-There are several open-source Terraform/OpenTofu module registries — [Terrareg](https://github.com/MatthewJohn/terrareg), [Tapir](https://github.com/PacoVK/tapir), [Citizen](https://github.com/outsideris/citizen), and others. They're good projects, but they all share a common challenge: **authentication and authorization are bolted on**. Most require you to stand up a separate database, configure API keys or OAuth flows, and manage user accounts outside of your infrastructure platform.
+There are several open-source Terraform/OpenTofu module registries. They're good projects, but they all share a common challenge: **authentication and authorization are bolted on**. Most require you to stand up a separate database, configure API keys or OAuth flows, and manage user accounts outside of your infrastructure platform.
 
-Kerrareg takes a fundamentally different approach. Instead of reinventing auth, it delegates entirely to Kubernetes — the platform you're already running.
+Kerrareg takes a fundamentally different approach. Instead of reinventing auth, it delegates it entirely to Kubernetes — the platform you're likely already running!
 
 ### Security First
 
@@ -54,16 +54,16 @@ Because Kerrareg uses Kubernetes ServiceAccounts and RBAC natively, your existin
 
 ### Desired State Reconciliation
 
-Traditional registries are imperative: you push a module version via an API call, and the registry stores it. If something goes wrong — a failed upload, a corrupted archive, a storage outage — you have to detect and remediate it yourself.
+Traditional registries are imperative: you push a module or provider version via an API call, and the registry stores it. If something goes wrong — a failed upload, a corrupted archive, a storage outage — you have to detect and remediate it yourself.
 
-Kerrareg is **declarative**. You describe the modules and versions you want, and Kubernetes controllers continuously reconcile toward that desired state:
+Kerrareg is **declarative**. You describe the modules/providers and versions you want, and Kubernetes controllers continuously reconcile toward that desired state:
 
-- **Self-healing:** If a Version resource fails to sync, the controller retries with exponential backoff. Transient GitHub or storage errors resolve automatically.
-- **Idempotent:** Applying the same Module manifest twice is a no-op. Controllers only act on drift.
+- **Self-healing:** If a Version resource fails to sync, the controller retries with exponential backoff. Transient GitHub, network, or storage errors resolve automatically.
+- **Idempotent:** Applying the same Module/Provider manifest twice is a no-op. Controllers only act on drift.
 - **Garbage collection:** Remove a version from `spec.versions` and the controller cleans up the Version resource and its storage artifact.
 - **Immutability enforcement:** When `immutable: true` is set, the controller validates checksums on every reconciliation — not just at upload time.
 
-This is the same operational model that makes Kubernetes itself reliable, applied to your module registry.
+This is the same operational model that makes Kubernetes itself reliable, applied to your OpenTofu registry.
 
 ### Tamper-Resistant Checksums
 

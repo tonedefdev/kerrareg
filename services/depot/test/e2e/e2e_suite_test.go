@@ -1,5 +1,5 @@
 /*
-Copyright 2026 Anthony Owens.
+Copyright 2026 Tony Owens.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -137,4 +137,3 @@ func splitImageRef(ref string) (repo, tag string) {
 	}
 	return ref, "latest"
 }
-

@@ -1,12 +1,15 @@
 apiVersion: v2
 name: kerrareg
-description: A Helm chart for deploying Kerrareg, a cloud-native OpenTofu Module Registry
+description: A Helm chart for deploying Kerrareg, a cloud-native OpenTofu Registry
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "1.0.0-rc1"
 keywords:
   - terraform
+  - opentofu
   - module-registry
+  - provider-registry
   - kubernetes
 maintainers:
-  - name: Kerrareg Contributors
+  - name: Tony Owens
+    email: tony.owens@defdev.io

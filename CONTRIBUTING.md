@@ -11,8 +11,10 @@ Thank you for your interest in contributing to Kerrareg! This guide covers every
   - [Module Controller](#module-controller)
   - [Provider Controller](#provider-controller)
   - [Depot Controller](#depot-controller)
+  - [Version Controller](#version-controller)
 - [Regenerating CRDs](#regenerating-crds)
 - [Building Images Manually](#building-images-manually)
+- [Adding a Storage Backend](#adding-a-storage-backend)
 - [Test Architecture](#test-architecture)
 
 ---
@@ -127,6 +129,21 @@ IMG=depot-controller:e2e-test go test ./test/e2e/ -v -count=1 -timeout 20m
 
 The depot suite calls the [HashiCorp Releases API](https://api.releases.hashicorp.com) for provider discovery. The API enforces a maximum page size of `20` and uses an ISO 8601 timestamp as the pagination cursor.
 
+### Version Controller
+
+The version suite builds the version controller, module controller, and server images. It exercises:
+
+- Version controller pod health (`app=version-controller`)
+- Version CR creation by the module controller (a Module CR is applied; the module controller creates a `{module-name}-{version}` Version CR)
+- Version CR reconciliation by the version controller (`status.synced=true`)
+
+```bash
+cd services/version
+go test ./test/e2e/ -v -count=1 -timeout 20m
+```
+
+> **Note:** Unlike the other suites, no `IMG=` prefix is needed. The `BeforeSuite` builds all three images internally using the default tag `version-controller:e2e-test`. The suite relies on the module controller to create the Version CR — standalone Version CRs are not tested directly because the version controller requires a `moduleConfigRef.name` pointing to an existing Module CR.
+
 ---
 
 ## Regenerating CRDs
@@ -164,6 +181,86 @@ PLATFORM=linux/amd64 make build
 ```
 
 All services that import shared packages (`pkg/` or other services' Go modules) must be built from the **repository root** as the Docker build context — the Dockerfiles use `COPY` directives that reference paths relative to the root. The `make` targets handle this automatically.
+
+---
+
+## Adding a Storage Backend
+
+Kerrareg's storage layer is abstracted behind the `Storage` interface defined in [`pkg/storage/storage.go`](pkg/storage/storage.go). Adding support for a new storage system (e.g. Oracle Object Storage, MinIO, an SFTP server) requires only implementing that interface and wiring the new type into the controllers.
+
+### The interface
+
+```go
+type Storage interface {
+    DeleteObject(ctx context.Context, soi *types.StorageObjectInput) error
+    GetObject(ctx context.Context, soi *types.StorageObjectInput) (io.Reader, error)
+    GetObjectChecksum(ctx context.Context, soi *types.StorageObjectInput) error
+    PutObject(ctx context.Context, soi *types.StorageObjectInput) error
+}
+```
+
+All methods receive a `*types.StorageObjectInput` which carries everything a backend needs:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `FilePath` | `*string` | Destination path / object key / blob name |
+| `FileBytes` | `[]byte` | Raw artifact bytes (populated before `PutObject`) |
+| `FileExists` | `bool` | **Set this to `true`** inside `GetObjectChecksum` when the object is found |
+| `ObjectChecksum` | `*string` | **Set this** to the base64-encoded SHA-256 digest inside `GetObjectChecksum` |
+| `ArchiveChecksum` | `*string` | Expected checksum from the source (GitHub archive, etc.) used for verification |
+| `Version` | `*v1alpha1.Version` | The Version CR being reconciled |
+
+### Implementation steps
+
+1. **Create a new file** in `pkg/storage/`, e.g. `minio.go`:
+
+   ```go
+   package storage
+
+   import (
+       "context"
+       "io"
+
+       "github.com/tonedefdev/kerrareg/pkg/storage/types"
+   )
+
+   type MinIO struct {
+       // exported fields populated from the CRD spec or a Secret
+       Endpoint  string
+       Bucket    string
+       AccessKey string
+       SecretKey string
+   }
+
+   func (s *MinIO) DeleteObject(ctx context.Context, soi *types.StorageObjectInput) error { ... }
+   func (s *MinIO) GetObject(ctx context.Context, soi *types.StorageObjectInput) (io.Reader, error) { ... }
+   func (s *MinIO) GetObjectChecksum(ctx context.Context, soi *types.StorageObjectInput) error { ... }
+   func (s *MinIO) PutObject(ctx context.Context, soi *types.StorageObjectInput) error { ... }
+   ```
+
+   Refer to the existing [`filesystem.go`](pkg/storage/filesystem.go), [`aws.go`](pkg/storage/aws.go), or [`azure.go`](pkg/storage/azure.go) implementations as concrete examples.
+
+2. **Add a `StorageMethod` constant** (if needed) in `pkg/storage/types/types.go` and regenerate the stringer:
+
+   ```bash
+   cd pkg/storage/types
+   go generate ./...
+   ```
+
+3. **Extend the CRD** to expose the new backend's configuration. Storage method selection lives in `api/v1alpha1/types.go`. Add a new `storageMethod` enum value and any associated spec fields, then regenerate CRDs:
+
+   ```bash
+   cd api/v1alpha1
+   make generate manifests
+   ```
+
+4. **Wire the backend into each controller** that handles storage. Each relevant controller constructs a `storage.Storage` value based on the `storageMethod` field on the reconciled CR — add a case for the new method that instantiates your new type.
+
+5. **Update the Helm chart** (`chart/kerrareg/values.yaml` and the relevant deployment template) to surface any new configuration your backend requires (endpoint, bucket name, credentials reference, etc.).
+
+### `RemoveTrailingSlash` helper
+
+The package exposes `storage.RemoveTrailingSlash(s *string)` which strips a trailing `/` or `\` from a path string. Use it when constructing `soi.FilePath` to avoid double-slash object keys, consistent with how the existing backends behave.
 
 ---
 

@@ -8,7 +8,7 @@ import (
 	"github.com/tonedefdev/kerrareg/pkg/storage/types"
 )
 
-// Storage interface implements methods to store a specific Version or Provider in an external storage system.
+// Storage interface implements methods to store a specific Version in an external storage system.
 type Storage interface {
 	// Deletes a file from the configured storage system.
 	DeleteObject(ctx context.Context, soi *types.StorageObjectInput) error
