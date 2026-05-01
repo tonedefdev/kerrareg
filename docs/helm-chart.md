@@ -1,1 +1,0 @@
---8<-- "chart/kerrareg/README.md"
