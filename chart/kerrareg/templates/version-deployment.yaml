@@ -41,7 +41,7 @@ spec:
       {{- end }}
       containers:
       - name: version-controller
-        image: "{{ .Values.version.image.repository }}:{{ .Values.global.image.tag }}"
+        image: "{{ .Values.version.image.repository }}:{{ default .Values.global.image.tag .Values.version.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         {{- if .Values.rbac.scopeToNamespace }}
         env:

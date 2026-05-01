@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
@@ -251,4 +252,42 @@ func UncommentCode(filename, target, prefix string) error {
 	}
 
 	return nil
+}
+
+// GetChartPath returns the absolute path to the kerrareg Helm chart.
+func GetChartPath() (string, error) {
+	projDir, err := GetProjectDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projDir, "..", "..", "chart", "kerrareg"), nil
+}
+
+// GetRepoRoot returns the root directory of the kerrareg repository.
+func GetRepoRoot() (string, error) {
+	projDir, err := GetProjectDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projDir, "..", ".."), nil
+}
+
+// RunAt executes the provided command from the given directory.
+// Unlike Run, it does not override the directory with GetProjectDir.
+func RunAt(cmd *exec.Cmd, dir string) (string, error) {
+	origDir, _ := os.Getwd()
+	defer func() { _ = os.Chdir(origDir) }()
+
+	cmd.Dir = dir
+	if err := os.Chdir(cmd.Dir); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "chdir dir: %q\n", err)
+	}
+	cmd.Env = append(os.Environ(), "GO111MODULE=on")
+	command := strings.Join(cmd.Args, " ")
+	_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("%q failed with error %q: %w", command, string(output), err)
+	}
+	return string(output), nil
 }

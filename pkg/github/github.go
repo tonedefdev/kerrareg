@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/go-logr/logr"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/go-github/v81/github"
 	"golang.org/x/oauth2"
 	corev1 "k8s.io/api/core/v1"

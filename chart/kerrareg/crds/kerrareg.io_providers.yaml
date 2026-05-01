@@ -1,0 +1,238 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: providers.kerrareg.io
+spec:
+  group: kerrareg.io
+  names:
+    kind: Provider
+    listKind: ProviderList
+    plural: providers
+    singular: provider
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: The latest version of the provider
+      jsonPath: .status.latestVersion
+      name: LatestVersion
+      type: string
+    - description: The name of the provider
+      jsonPath: .spec.providerConfig.name
+      name: Name
+      type: string
+    - description: Whether the Provider has synced successfully
+      jsonPath: .status.synced
+      name: Synced
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Provider is the Schema for the Providers API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ProviderSpec defines the desired state of a Kerrareg Provider.
+            properties:
+              forceSync:
+                description: A flag to force a provider to synchronize
+                type: boolean
+              providerConfig:
+                description: The configuration details for the provider that will
+                  be used to create each ProviderVersion
+                properties:
+                  architectures:
+                    description: The architecture(s) that the provider supports. This
+                      is used to set the 'arch' constraint in the provider's versions.
+                    items:
+                      type: string
+                    type: array
+                  name:
+                    description: |-
+                      The name of the provider. If omitted, the name of the Provider resource
+                      is used in its place.
+                    type: string
+                  operatingSystems:
+                    description: The OS(s) that the provider supports. This is used
+                      to set the 'os' constraint in the provider's versions.
+                    items:
+                      type: string
+                    type: array
+                  storageConfig:
+                    description: The external storage configuration settings.
+                    properties:
+                      azureStorage:
+                        properties:
+                          accountName:
+                            description: The Azure Storage Account name.
+                            type: string
+                          accountUrl:
+                            description: The Azure Storage Account URL.
+                            type: string
+                          resourceGroup:
+                            description: The Azure Resource Group where the Azure
+                              Storage Account is located.
+                            type: string
+                          subscriptionID:
+                            description: The Azure subscription ID where the Azure
+                              Storage Account is located.
+                            type: string
+                        required:
+                        - accountName
+                        - accountUrl
+                        - resourceGroup
+                        - subscriptionID
+                        type: object
+                      fileSystem:
+                        description: The configuration settings for storing Versions
+                          on a local filesystem.
+                        properties:
+                          directoryPath:
+                            description: The directory path on the file system where
+                              the Version will be stored.
+                            type: string
+                        type: object
+                      gcs:
+                        description: The configuration settings for storing Versions
+                          in a Google Cloud Storage bucket.
+                        properties:
+                          bucket:
+                            description: The GCS bucket name.
+                            type: string
+                        required:
+                        - bucket
+                        type: object
+                      s3:
+                        description: The configuration settings for storing Versions
+                          in an Amazon S3 bucket.
+                        properties:
+                          bucket:
+                            description: The S3 bucket name.
+                            type: string
+                          key:
+                            description: |-
+                              The S3 bucket key, ie: 'my/bucket/prefix'
+                              The file name will be automatically generated by the kerrareg-module-controller.
+                            type: string
+                          region:
+                            description: The AWS region for the bucket.
+                            type: string
+                        required:
+                        - bucket
+                        - region
+                        type: object
+                    type: object
+                  versionConstraints:
+                    description: |-
+                      A comma-separated list of version constraints such as
+                      '1.2.1' or '>= 1.0.0, < 2.0.0' or '~> 1.0.0'. This field is only
+                      respected by the Depot controller.
+                    type: string
+                  versionHistoryLimit:
+                    description: The version history limit for the provider.
+                    type: integer
+                type: object
+              versions:
+                description: |-
+                  The version of the provider. This should be a list of maps with semantic version tags. For example, 'version: v1.0.0', or 'version: 1.0.0'.
+                  The version controller will automatically trim any leading 'v' character to make them compatible
+                  with the registry protocol
+                items:
+                  description: ProviderVersion holds details about the Version resource
+                    under management.
+                  properties:
+                    architecture:
+                      description: The system architecture this Version of the Provider
+                        supports.
+                      type: string
+                    name:
+                      description: The name of the provider.
+                      type: string
+                    operatingSystem:
+                      description: The operating system this Version of the Provider
+                        supports.
+                      type: string
+                    synced:
+                      description: Whether the Version for the Provider has synced
+                        or not.
+                      type: boolean
+                    version:
+                      description: The version of the provider.
+                      type: string
+                  type: object
+                type: array
+            required:
+            - providerConfig
+            - versions
+            type: object
+          status:
+            description: ProviderStatus defines the observed state of a provider.
+            properties:
+              fileName:
+                description: The randomly generated filename with its file extension.
+                type: string
+              latestVersion:
+                description: The latest available version of the provider
+                type: string
+              providerVersionRefs:
+                additionalProperties:
+                  description: ProviderVersion holds details about the Version resource
+                    under management.
+                  properties:
+                    architecture:
+                      description: The system architecture this Version of the Provider
+                        supports.
+                      type: string
+                    name:
+                      description: The name of the provider.
+                      type: string
+                    operatingSystem:
+                      description: The operating system this Version of the Provider
+                        supports.
+                      type: string
+                    synced:
+                      description: Whether the Version for the Provider has synced
+                        or not.
+                      type: boolean
+                    version:
+                      description: The version of the provider.
+                      type: string
+                  type: object
+                description: A slice of the ProviderVersionRefs that have been successfully
+                  created by the controller
+                type: object
+              syncStatus:
+                description: A field for declaring current status information about
+                  how the resource is being reconciled
+                type: string
+              synced:
+                description: A flag to determine if the provider has successfully
+                  synced to its desired state
+                type: boolean
+            required:
+            - syncStatus
+            - synced
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

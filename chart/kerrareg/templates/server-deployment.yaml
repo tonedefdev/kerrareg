@@ -38,7 +38,7 @@ spec:
       {{- end }}
       containers:
       - name: server
-        image: "{{ .Values.server.image.repository }}:{{ .Values.global.image.tag }}"
+        image: "{{ .Values.server.image.repository }}:{{ default .Values.global.image.tag .Values.server.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         args:
         {{- if .Values.server.anonymousAuth }}
@@ -50,6 +50,11 @@ spec:
         {{- if .Values.server.tls.enabled }}
         - --tls-cert-path={{ .Values.server.tls.certPath }}
         - --tls-cert-key={{ .Values.server.tls.keyPath }}
+        {{- end }}
+        {{- if .Values.server.gpg.secretName }}
+        envFrom:
+        - secretRef:
+            name: {{ .Values.server.gpg.secretName }}
         {{- end }}
         ports:
         - name: http

@@ -19,6 +19,7 @@ package utils
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -202,44 +203,6 @@ func GetProjectDir() (string, error) {
 	return wd, nil
 }
 
-// GetChartPath returns the absolute path to the kerrareg Helm chart.
-func GetChartPath() (string, error) {
-	projDir, err := GetProjectDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(projDir, "..", "..", "chart", "kerrareg"), nil
-}
-
-// GetRepoRoot returns the root directory of the kerrareg repository.
-func GetRepoRoot() (string, error) {
-	projDir, err := GetProjectDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(projDir, "..", ".."), nil
-}
-
-// RunAt executes the provided command from the given directory.
-// Unlike Run, it does not override the directory with GetProjectDir.
-func RunAt(cmd *exec.Cmd, dir string) (string, error) {
-	origDir, _ := os.Getwd()
-	defer func() { _ = os.Chdir(origDir) }()
-
-	cmd.Dir = dir
-	if err := os.Chdir(cmd.Dir); err != nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "chdir dir: %q\n", err)
-	}
-	cmd.Env = append(os.Environ(), "GO111MODULE=on")
-	command := strings.Join(cmd.Args, " ")
-	_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(output), fmt.Errorf("%q failed with error %q: %w", command, string(output), err)
-	}
-	return string(output), nil
-}
-
 // UncommentCode searches for target in the file and remove the comment prefix
 // of the target content. The target content may span multiple lines.
 func UncommentCode(filename, target, prefix string) error {
@@ -290,4 +253,99 @@ func UncommentCode(filename, target, prefix string) error {
 	}
 
 	return nil
+}
+
+// GetChartPath returns the absolute path to the kerrareg Helm chart.
+func GetChartPath() (string, error) {
+	projDir, err := GetProjectDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projDir, "..", "..", "chart", "kerrareg"), nil
+}
+
+// GetRepoRoot returns the root directory of the kerrareg repository.
+func GetRepoRoot() (string, error) {
+	projDir, err := GetProjectDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projDir, "..", ".."), nil
+}
+
+// RunAt executes the provided command from the given directory.
+// Unlike Run, it does not override the directory with GetProjectDir.
+func RunAt(cmd *exec.Cmd, dir string) (string, error) {
+	origDir, _ := os.Getwd()
+	defer func() { _ = os.Chdir(origDir) }()
+
+	cmd.Dir = dir
+	if err := os.Chdir(cmd.Dir); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "chdir dir: %q\n", err)
+	}
+	cmd.Env = append(os.Environ(), "GO111MODULE=on")
+	command := strings.Join(cmd.Args, " ")
+	_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("%q failed with error %q: %w", command, string(output), err)
+	}
+	return string(output), nil
+}
+
+// GenerateTestGPGKeyPair generates an ephemeral GPG key pair in the provided gpgHome
+// directory and returns the key ID, ASCII-armored public key, and base64-encoded
+// ASCII-armored private key. All gpg operations are isolated to gpgHome via GNUPGHOME.
+func GenerateTestGPGKeyPair(gpgHome string) (keyID, asciiArmor, privateKeyBase64 string, err error) {
+	runGPG := func(args ...string) (string, error) {
+		cmd := exec.Command("gpg", args...)
+		cmd.Env = append(os.Environ(), fmt.Sprintf("GNUPGHOME=%s", gpgHome))
+		out, e := cmd.CombinedOutput()
+		return string(out), e
+	}
+
+	batchInput := "%no-protection\nKey-Type: RSA\nKey-Length: 2048\nName-Real: Kerrareg E2E Test\nName-Email: test@kerrareg.test\nExpire-Date: 0\n%commit\n"
+	batchFile := filepath.Join(gpgHome, "keybatch")
+	if err = os.WriteFile(batchFile, []byte(batchInput), 0600); err != nil {
+		return "", "", "", fmt.Errorf("failed to write gpg batch file: %w", err)
+	}
+
+	if _, err = runGPG("--batch", "--gen-key", batchFile); err != nil {
+		return "", "", "", fmt.Errorf("failed to generate gpg key: %w", err)
+	}
+
+	// Parse the key fingerprint from colon-delimited output.
+	listOut, err := runGPG("--list-keys", "--keyid-format", "long", "--with-colons")
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to list gpg keys: %w", err)
+	}
+	for _, line := range strings.Split(listOut, "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) >= 10 && fields[0] == "fpr" && fields[9] != "" {
+			fpr := fields[9]
+			if len(fpr) >= 16 {
+				keyID = fpr[len(fpr)-16:]
+			}
+			break
+		}
+	}
+	if keyID == "" {
+		return "", "", "", fmt.Errorf("could not parse gpg key ID from output: %s", listOut)
+	}
+
+	// Export ASCII-armored public key.
+	pubOut, err := runGPG("--armor", "--export", keyID)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to export gpg public key: %w", err)
+	}
+	asciiArmor = pubOut
+
+	// Export ASCII-armored private key and base64-encode it.
+	privOut, err := runGPG("--armor", "--export-secret-keys", keyID)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to export gpg private key: %w", err)
+	}
+	privateKeyBase64 = base64.StdEncoding.EncodeToString([]byte(privOut))
+
+	return keyID, asciiArmor, privateKeyBase64, nil
 }

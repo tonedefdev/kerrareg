@@ -30,56 +30,51 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/tonedefdev/kerrareg/services/module/test/utils"
+	"github.com/tonedefdev/kerrareg/services/provider/test/utils"
 )
 
 // namespace where the project is deployed in.
 const namespace = "kerrareg-system"
 
-var _ = Describe("Module", Ordered, func() {
+var _ = Describe("Provider", Ordered, func() {
 	const (
-		moduleNamespace       = "kerrareg-system"
+		providerNamespace     = "kerrareg-system"
 		serverPortForwardPort = "18080"
-		// OpenTofu requires a module registry hostname with at least one dot.
-		// kerrareg.localtest.me resolves to 127.0.0.1 via public DNS (localtest.me service).
-		registryHost        = "kerrareg.localtest.me:18080"
-		moduleCRName        = "terraform-aws-key-pair"
-		moduleVersion       = "2.0.0"
-		moduleVersionCRName = "terraform-aws-key-pair-2.0.0"
-		moduleProvider      = "aws"
-		moduleStoragePath   = "/data/modules"
+		providerCRName        = "aws"
+		providerVersion       = "5.80.0"
+		providerVersionCRName = "aws-5-80-0-linux-amd64"
+		providerStoragePath   = "/data/modules"
 	)
 
 	var pfCancel context.CancelFunc
 
 	BeforeAll(func() {
-		By("applying the test Module CR")
-		moduleYAML := fmt.Sprintf(`
+		By("applying the test Provider CR")
+		providerYAML := fmt.Sprintf(`
 apiVersion: kerrareg.io/v1alpha1
-kind: Module
+kind: Provider
 metadata:
   name: %s
   namespace: %s
 spec:
-  moduleConfig:
-    fileFormat: zip
-    githubClientConfig:
-      useAuthenticatedClient: false
-    provider: %s
-    repoOwner: terraform-aws-modules
-    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-key-pair
+  providerConfig:
+    name: %s
+    operatingSystems:
+      - linux
+    architectures:
+      - amd64
     storageConfig:
       fileSystem:
         directoryPath: %s
   versions:
     - version: "%s"
-`, moduleCRName, moduleNamespace, moduleProvider, moduleStoragePath, moduleVersion)
+`, providerCRName, providerNamespace, providerCRName, providerStoragePath, providerVersion)
 
-		moduleFile := filepath.Join(GinkgoT().TempDir(), "test-module.yaml")
-		Expect(os.WriteFile(moduleFile, []byte(moduleYAML), 0600)).To(Succeed())
-		cmd := exec.Command("kubectl", "apply", "-f", moduleFile)
+		providerFile := filepath.Join(GinkgoT().TempDir(), "test-provider.yaml")
+		Expect(os.WriteFile(providerFile, []byte(providerYAML), 0600)).To(Succeed())
+		cmd := exec.Command("kubectl", "apply", "-f", providerFile)
 		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to apply test Module CR")
+		Expect(err).NotTo(HaveOccurred(), "Failed to apply test Provider CR")
 
 		By("starting port-forward to the kerrareg server")
 		pfCtx, cancel := context.WithCancel(context.Background())
@@ -87,7 +82,7 @@ spec:
 		pfCmd := exec.CommandContext(pfCtx, "kubectl", "port-forward",
 			"svc/server",
 			fmt.Sprintf("%s:80", serverPortForwardPort),
-			"-n", moduleNamespace,
+			"-n", providerNamespace,
 		)
 		Expect(pfCmd.Start()).To(Succeed(), "Failed to start port-forward")
 		// Allow port-forward to establish.
@@ -98,18 +93,18 @@ spec:
 		if pfCancel != nil {
 			pfCancel()
 		}
-		cmd := exec.Command("kubectl", "delete", "module", moduleCRName,
-			"-n", moduleNamespace, "--ignore-not-found",
+		cmd := exec.Command("kubectl", "delete", "provider", providerCRName,
+			"-n", providerNamespace, "--ignore-not-found",
 		)
 		_, _ = utils.Run(cmd)
 	})
 
-	It("should create Version CRs for the module", func() {
+	It("should create Version CRs for the provider", func() {
 		By("waiting for Version CRs to be created")
 		Eventually(func(g Gomega) {
 			cmd := exec.Command("kubectl", "get", "versions",
-				"-l", fmt.Sprintf("kerrareg.io/module=%s", moduleCRName),
-				"-n", moduleNamespace,
+				"-l", fmt.Sprintf("kerrareg.io/provider=%s", providerCRName),
+				"-n", providerNamespace,
 				"--no-headers",
 			)
 			output, err := utils.Run(cmd)
@@ -119,11 +114,11 @@ spec:
 		}, 60*time.Second, 3*time.Second).Should(Succeed())
 	})
 
-	It("should sync the module artifact", func() {
-		By("waiting for Version CR to report synced=true (downloads from GitHub)")
+	It("should sync the provider artifact", func() {
+		By("waiting for Version CR to report synced=true (downloads from HashiCorp)")
 		Eventually(func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "version", moduleVersionCRName,
-				"-n", moduleNamespace,
+			cmd := exec.Command("kubectl", "get", "version", providerVersionCRName,
+				"-n", providerNamespace,
 				"-o", `jsonpath={.status.synced}`,
 			)
 			output, err := utils.Run(cmd)
@@ -132,10 +127,10 @@ spec:
 		}, 5*time.Minute, 10*time.Second).Should(Succeed())
 	})
 
-	It("should serve module registry API endpoints", func() {
-		// The module sync downloads from GitHub, which can take several minutes.
+	It("should serve provider registry API endpoints", func() {
+		// The provider sync downloads ~700MB, which can take several minutes.
 		// The port-forward may have died during that wait, so restart it here.
-		By("refreshing port-forward after artifact sync")
+		By("refreshing port-forward after long sync")
 		if pfCancel != nil {
 			pfCancel()
 		}
@@ -145,7 +140,7 @@ spec:
 		pfRefreshCmd := exec.CommandContext(pfCtx, "kubectl", "port-forward",
 			"svc/server",
 			fmt.Sprintf("%s:80", serverPortForwardPort),
-			"-n", moduleNamespace,
+			"-n", providerNamespace,
 		)
 		Expect(pfRefreshCmd.Start()).To(Succeed(), "Failed to restart port-forward before API tests")
 
@@ -166,39 +161,53 @@ spec:
 
 		By("checking /.well-known/terraform.json")
 		body := httpGetBody(base + "/.well-known/terraform.json")
-		Expect(body).To(ContainSubstring("modules.v1"))
+		Expect(body).To(ContainSubstring("providers.v1"))
 
-		By("checking module versions list endpoint")
-		body = httpGetBody(fmt.Sprintf("%s/kerrareg/modules/v1/%s/%s/%s/versions",
-			base, moduleNamespace, moduleCRName, moduleProvider))
-		Expect(body).To(ContainSubstring(moduleVersion))
+		By("checking provider versions list endpoint")
+		body = httpGetBody(fmt.Sprintf("%s/kerrareg/providers/v1/%s/%s/versions",
+			base, providerNamespace, providerCRName))
+		Expect(body).To(ContainSubstring(providerVersion))
 
-		By("checking module download endpoint returns X-Terraform-Get header")
-		resp := httpGetRaw(fmt.Sprintf("%s/kerrareg/modules/v1/%s/%s/%s/%s/download",
-			base, moduleNamespace, moduleCRName, moduleProvider, moduleVersion))
-		defer resp.Body.Close()
-		Expect(resp.StatusCode).To(Equal(http.StatusNoContent))
-		Expect(resp.Header.Get("X-Terraform-Get")).To(ContainSubstring("/kerrareg/modules/v1/download/"))
+		By("checking provider download endpoint")
+		body = httpGetBody(fmt.Sprintf("%s/kerrareg/providers/v1/%s/%s/%s/download/linux/amd64",
+			base, providerNamespace, providerCRName, providerVersion))
+		Expect(body).To(ContainSubstring("download_url"))
+		Expect(body).To(ContainSubstring("shasum"))
+		Expect(body).To(ContainSubstring("signing_keys"))
+
+		By("checking SHA256SUMS endpoint")
+		body = httpGetBody(fmt.Sprintf("%s/kerrareg/providers/v1/%s/%s/%s/SHA256SUMS/linux/amd64",
+			base, providerNamespace, providerCRName, providerVersion))
+		Expect(body).NotTo(BeEmpty())
+
+		By("checking SHA256SUMS.sig endpoint")
+		body = httpGetBody(fmt.Sprintf("%s/kerrareg/providers/v1/%s/%s/%s/SHA256SUMS.sig/linux/amd64",
+			base, providerNamespace, providerCRName, providerVersion))
+		Expect(body).NotTo(BeEmpty())
 	})
 
 	It("should successfully run tofu init against the kerrareg registry", func() {
 		By("creating a temp directory with a Terraform config")
 		tmpDir := GinkgoT().TempDir()
 
-		mainTF := fmt.Sprintf(`module "key_pair" {
-  source  = "%s/%s/%s/%s"
-  version = "%s"
-}
-`, registryHost, moduleNamespace, moduleCRName, moduleProvider, moduleVersion)
-		Expect(os.WriteFile(filepath.Join(tmpDir, "main.tf"), []byte(mainTF), 0600)).To(Succeed())
-
-		By("writing a .tofurc to point at the local module registry")
-		tofuRC := fmt.Sprintf(`host "%s" {
-  services = {
-    "modules.v1" = "http://%s/kerrareg/modules/v1/"
+		mainTF := fmt.Sprintf(`terraform {
+  required_providers {
+    aws = {
+      source  = "localhost:%s/%s/%s"
+      version = "%s"
+    }
   }
 }
-`, registryHost, registryHost)
+`, serverPortForwardPort, providerNamespace, providerCRName, providerVersion)
+		Expect(os.WriteFile(filepath.Join(tmpDir, "main.tf"), []byte(mainTF), 0600)).To(Succeed())
+
+		By("writing a .tofurc to point at the local registry")
+		tofuRC := fmt.Sprintf(`host "localhost:%s" {
+  services = {
+    "providers.v1" = "http://localhost:%s/kerrareg/providers/v1/"
+  }
+}
+`, serverPortForwardPort, serverPortForwardPort)
 		tofuRCPath := filepath.Join(tmpDir, ".tofurc")
 		Expect(os.WriteFile(tofuRCPath, []byte(tofuRC), 0600)).To(Succeed())
 
@@ -216,9 +225,9 @@ spec:
 
 	It("should enforce Kubernetes RBAC when anonymousAuth is disabled", func() {
 		const (
-			authTestSA   = "kerrareg-e2e-reader"
-			authTestRole = "kerrareg-e2e-reader"
-			authTestRB   = "kerrareg-e2e-reader"
+			authTestSA   = "kerrareg-e2e-provider-reader"
+			authTestRole = "kerrareg-e2e-provider-reader"
+			authTestRB   = "kerrareg-e2e-provider-reader"
 		)
 
 		chartPath, err := utils.GetChartPath()
@@ -227,7 +236,7 @@ spec:
 		DeferCleanup(func() {
 			By("restoring anonymous auth after auth test")
 			restoreCmd := exec.Command("helm", "upgrade", helmReleaseName, chartPath,
-				"--namespace", moduleNamespace,
+				"--namespace", providerNamespace,
 				"--reuse-values",
 				"--set", "server.anonymousAuth=true",
 				"--set", "server.useBearerToken=false",
@@ -246,20 +255,20 @@ spec:
 			pfRestoreCmd := exec.CommandContext(pfCtx, "kubectl", "port-forward",
 				"svc/server",
 				fmt.Sprintf("%s:80", serverPortForwardPort),
-				"-n", moduleNamespace,
+				"-n", providerNamespace,
 			)
 			_ = pfRestoreCmd.Start()
 			time.Sleep(3 * time.Second)
 
 			By("cleaning up auth test RBAC")
-			_, _ = utils.Run(exec.Command("kubectl", "delete", "rolebinding", authTestRB, "-n", moduleNamespace, "--ignore-not-found"))
-			_, _ = utils.Run(exec.Command("kubectl", "delete", "role", authTestRole, "-n", moduleNamespace, "--ignore-not-found"))
-			_, _ = utils.Run(exec.Command("kubectl", "delete", "serviceaccount", authTestSA, "-n", moduleNamespace, "--ignore-not-found"))
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "rolebinding", authTestRB, "-n", providerNamespace, "--ignore-not-found"))
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "role", authTestRole, "-n", providerNamespace, "--ignore-not-found"))
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "serviceaccount", authTestSA, "-n", providerNamespace, "--ignore-not-found"))
 		})
 
 		By("disabling anonymous auth via Helm upgrade")
 		cmd := exec.Command("helm", "upgrade", helmReleaseName, chartPath,
-			"--namespace", moduleNamespace,
+			"--namespace", providerNamespace,
 			"--reuse-values",
 			"--set", "server.anonymousAuth=false",
 			"--set", "server.useBearerToken=true",
@@ -279,71 +288,84 @@ spec:
 		pfCmd := exec.CommandContext(pfCtx, "kubectl", "port-forward",
 			"svc/server",
 			fmt.Sprintf("%s:80", serverPortForwardPort),
-			"-n", moduleNamespace,
+			"-n", providerNamespace,
 		)
 		Expect(pfCmd.Start()).To(Succeed(), "Failed to restart port-forward")
 		time.Sleep(3 * time.Second)
 
 		By("verifying unauthenticated request returns 401")
 		unauthResp, err := http.Get(fmt.Sprintf( //nolint:noctx
-			"http://localhost:%s/kerrareg/modules/v1/%s/%s/%s/versions",
-			serverPortForwardPort, moduleNamespace, moduleCRName, moduleProvider))
+			"http://localhost:%s/kerrareg/providers/v1/%s/%s/versions",
+			serverPortForwardPort, providerNamespace, providerCRName))
 		Expect(err).NotTo(HaveOccurred())
 		_ = unauthResp.Body.Close()
 		Expect(unauthResp.StatusCode).To(Equal(http.StatusUnauthorized))
 
 		By("creating a read-only ServiceAccount and RBAC for the auth test")
-		_, _ = utils.Run(exec.Command("kubectl", "create", "serviceaccount", authTestSA, "-n", moduleNamespace))
+		_, _ = utils.Run(exec.Command("kubectl", "create", "serviceaccount", authTestSA, "-n", providerNamespace))
 		_, _ = utils.Run(exec.Command("kubectl", "create", "role", authTestRole,
-			"-n", moduleNamespace,
-			"--resource=modules.kerrareg.io,versions.kerrareg.io",
+			"-n", providerNamespace,
+			"--resource=providers.kerrareg.io,versions.kerrareg.io",
 			"--verb=get,list,watch",
 		))
 		_, _ = utils.Run(exec.Command("kubectl", "create", "rolebinding", authTestRB,
-			"-n", moduleNamespace,
+			"-n", providerNamespace,
 			fmt.Sprintf("--role=%s", authTestRole),
-			fmt.Sprintf("--serviceaccount=%s:%s", moduleNamespace, authTestSA),
+			fmt.Sprintf("--serviceaccount=%s:%s", providerNamespace, authTestSA),
 		))
 
 		By("generating a short-lived ServiceAccount token")
 		tokenOutput, err := utils.Run(exec.Command("kubectl", "create", "token", authTestSA,
-			"-n", moduleNamespace,
+			"-n", providerNamespace,
 			"--duration=1h",
 		))
 		Expect(err).NotTo(HaveOccurred())
 		token := strings.TrimSpace(tokenOutput)
 		Expect(token).NotTo(BeEmpty())
 
+		// OpenTofu sends credentials (from the .tofurc credentials block) over HTTP for
+		// hostnames that are not the loopback address "localhost". We use
+		// "kerrareg.localtest.me:18080" — a public DNS wildcard that resolves to 127.0.0.1 —
+		// so that the existing port-forward (localhost:18080) is reachable while OpenTofu
+		// treats the host as a non-local name and forwards the bearer token on every HTTP
+		// request (versions, download metadata, SHA256SUMS, binary). This is the same
+		// pattern used in the module e2e auth test.
+		const authRegistryHost = "kerrareg.localtest.me:18080"
+
 		By("running tofu init with bearer token authentication")
 		tmpDir := GinkgoT().TempDir()
-		mainTF := fmt.Sprintf(`module "key_pair" {
-  source  = "%s/%s/%s/%s"
-  version = "%s"
+		mainTF := fmt.Sprintf(`terraform {
+  required_providers {
+    aws = {
+      source  = "%s/%s/%s"
+      version = "%s"
+    }
+  }
 }
-`, registryHost, moduleNamespace, moduleCRName, moduleProvider, moduleVersion)
+`, authRegistryHost, providerNamespace, providerCRName, providerVersion)
 		Expect(os.WriteFile(filepath.Join(tmpDir, "main.tf"), []byte(mainTF), 0600)).To(Succeed())
 
 		tofuRC := fmt.Sprintf(`host "%s" {
   services = {
-    "modules.v1" = "http://%s/kerrareg/modules/v1/"
+    "providers.v1" = "http://%s/kerrareg/providers/v1/"
   }
 }
 credentials "%s" {
   token = "%s"
 }
-`, registryHost, registryHost, registryHost, token)
+`, authRegistryHost, authRegistryHost, authRegistryHost, token)
 		tofuRCPath := filepath.Join(tmpDir, ".tofurc")
 		Expect(os.WriteFile(tofuRCPath, []byte(tofuRC), 0600)).To(Succeed())
 
-		iniCmd := exec.Command("tofu", "init", "-no-color")
-		iniCmd.Dir = tmpDir
-		iniCmd.Env = append(os.Environ(),
+		initCmd := exec.Command("tofu", "init", "-no-color")
+		initCmd.Dir = tmpDir
+		initCmd.Env = append(os.Environ(),
 			fmt.Sprintf("TF_CLI_CONFIG_FILE=%s", tofuRCPath),
 		)
-		output, initErr := iniCmd.CombinedOutput()
+		initOutput, initErr := initCmd.CombinedOutput()
 		Expect(initErr).NotTo(HaveOccurred(),
-			"tofu init with auth failed; output:\n%s", string(output))
-		Expect(string(output)).To(ContainSubstring("successfully initialized"))
+			"tofu init with auth failed; output:\n%s", string(initOutput))
+		Expect(string(initOutput)).To(ContainSubstring("successfully initialized"))
 	})
 })
 
@@ -362,10 +384,3 @@ func httpGetBody(url string) string {
 	return string(body)
 }
 
-// httpGetRaw performs an HTTP GET and returns the raw response (without reading the body).
-// The caller is responsible for closing resp.Body.
-func httpGetRaw(url string) *http.Response {
-	resp, err := http.Get(url) //nolint:noctx
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "HTTP GET failed for %s", url)
-	return resp
-}

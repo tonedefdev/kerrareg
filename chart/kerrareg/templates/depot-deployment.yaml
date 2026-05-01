@@ -25,7 +25,7 @@ spec:
         runAsUser: 65532
       containers:
       - name: depot-controller
-        image: "{{ .Values.depot.image.repository }}:{{ .Values.global.image.tag }}"
+        image: "{{ .Values.depot.image.repository }}:{{ default .Values.global.image.tag .Values.depot.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         {{- if .Values.rbac.scopeToNamespace }}
         env:

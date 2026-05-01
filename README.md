@@ -22,7 +22,9 @@ Compatible with **OpenTofu** (all versions) and **Terraform** (v1.2+).
 - [Getting Started](#getting-started)
 - [Local Testing with kind](#local-testing-with-kind)
 - [Configuration](#configuration)
+  - [GPG Signing for Providers](#gpg-signing-for-providers)
 - [Usage](#usage)
+  - [Consuming Providers](#consuming-providers)
 - [Migrating to Kerrareg](#migrating-to-kerrareg)
 - [Authenticating with Kerrareg](#authenticating-with-kerrareg)
 - [Kubernetes RBAC](#kubernetes-rbac)
@@ -80,7 +82,7 @@ This means an attacker who gains write access to your storage backend still can'
 | Deployment model | Helm chart, runs on any Kubernetes cluster | Docker Compose or standalone | Docker Compose or standalone |
 | Self-healing | Yes (controller reconciliation loop) | No | No |
 | Multi-cloud storage | S3, Azure Blob, GCS, Filesystem | S3, Filesystem | S3, GCS, Filesystem |
-| Version discovery | Automatic via Depot (GitHub Releases API) | Manual upload or API push | Manual upload or API push |
+| Version discovery | Automatic via Depot (GitHub Releases API for modules, HashiCorp Releases API for providers) | Manual upload or API push | Manual upload or API push |
 | Immutability enforcement | Checksum validated every reconciliation | At upload time only | At upload time only |
 | Air-gapped support | Yes (filesystem backend + PVC) | Yes (filesystem) | Limited |
 
@@ -119,18 +121,19 @@ Kerrareg consists of four services running in Kubernetes:
 │               Server (Registry Protocol API)              │
 │  • Service Discovery    • List Versions                   │
 │  • Download Redirect    • File Serving (S3/Azure/FS)      │
+│  • Provider Registry    • GPG-signed SHA256SUMS           │
 └────────────────────────┬──────────────────────────────────┘
-                         │ reads Version + Module resources
-       ┌─────────────────┼─────────────────┐
-       ▼                 ▼                 ▼
-  ┌─────────┐      ┌──────────┐      ┌──────────┐
-  │  Depot   │─────▶│  Module  │─────▶│ Version  │
-  │controller│      │controller│      │controller│
-  └─────────┘      └──────────┘      └────┬─────┘
-  discovers          creates               │ fetches & stores
-  versions from      Version               ▼
-  GitHub             resources        ┌──────────┐
-                                      │ Storage  │
+                         │ reads Version + Module + Provider
+       ┌─────────────────┼─────────────────┬────────────────┐
+       ▼                 ▼                 ▼                ▼
+  ┌─────────┐      ┌──────────┐      ┌──────────┐    ┌──────────┐
+  │  Depot   │─────▶│  Module  │─────▶│ Version  │◀───│Provider  │
+  │controller│      │controller│      │controller│    │controller│
+  └─────────┘      └──────────┘      └────┬─────┘    └──────────┘
+  discovers          creates               │ fetches & stores   discovers
+  versions from      Version               ▼             versions from
+  GitHub             resources        ┌──────────┐      HashiCorp
+                                      │ Storage  │      Releases API
                                       │ Backend  │
                                       └──────────┘
                                       S3 │ Azure │ GCS │ FS
@@ -138,24 +141,37 @@ Kerrareg consists of four services running in Kubernetes:
 
 ### Event Flow
 
-1. **Depot controller** watches `Depot` resources, queries GitHub for releases matching version constraints, and creates or updates `Module` resources
+1. **Depot controller** watches `Depot` resources, queries the GitHub Releases API for modules matching version constraints, queries the HashiCorp Releases API for providers matching version constraints, and creates or updates `Module` and `Provider` resources
 2. **Module controller** watches `Module` resources, creates a `Version` resource for each version listed in `spec.versions`, generates unique filenames, and tracks the latest version
-3. **Version controller** watches `Version` resources, fetches module source from GitHub, computes SHA256 checksums, and uploads archives to the configured storage backend
-4. **Server** handles OpenTofu/Terraform requests, queries Kubernetes for `Module` and `Version` resources, and redirects downloads to the storage backend
+3. **Provider controller** watches `Provider` resources, creates a `Version` resource for each version and OS/architecture combination in `spec.versions`, and tracks the latest version
+4. **Version controller** watches `Version` resources, fetches module source from GitHub or provider binaries from the HashiCorp Releases API, computes SHA256 checksums, generates GPG signatures (for providers), and uploads archives to the configured storage backend
+5. **Server** handles OpenTofu/Terraform requests, queries Kubernetes for `Module`, `Provider`, and `Version` resources, and redirects downloads to the storage backend
 
 ## Services
 
 ### Version Controller (Core)
 
-The most critical component. It performs the actual work of fetching module source code from GitHub and uploading it to storage.
+The most critical component. It performs the actual work of fetching module and provider artifacts and uploading them to storage.
 
-**Reconciliation loop:**
+**Reconciliation loop (modules):**
 
 1. Fetches the module source from GitHub at the specified version/tag
 2. Packages the source into a distribution archive (`.tar.gz` or `.zip`)
-3. Computes a base64-encoded SHA256 checksum
-4. Uploads the archive to the configured storage backend
-5. Updates the `Version` resource status with the checksum and sync state
+3. Generates a UUID7 filename for the archive (via `spec.fileName`, set by the Module controller on creation)
+4. Computes a base64-encoded SHA256 checksum
+5. Uploads the archive to the configured storage backend
+6. Updates the `Version` resource status with the checksum and sync state
+
+**Reconciliation loop (providers):**
+
+1. Queries the HashiCorp Releases API for the provider binary matching the target OS/architecture
+2. Downloads the provider archive (`.zip`)
+3. Generates a UUID7 filename and persists it to `spec.fileName` on the `Version` resource — subsequent reconciliations reuse the same filename, preventing duplicate uploads
+4. Computes a SHA256 checksum and generates a detached GPG signature over the `SHA256SUMS` file
+5. Uploads the archive to the configured storage backend
+6. Updates the `Version` resource status with the sync state
+
+**Unpredictable filenames:** Both module and provider archives are stored with UUID7-generated filenames (e.g., `019726b3-1a2b-7c3d-8e4f-5a6b7c8d9e0f.zip`) instead of the original source filename. This prevents enumeration of storage objects by unauthenticated clients — the download URL cannot be guessed without first authenticating to the registry API and retrieving the `Version` resource.
 
 **Immutability:** When `immutable: true` is set in the module config, the Version controller enforces that the stored checksum always matches the archive checksum. This prevents any modification or replacement of a published version.
 
@@ -169,20 +185,64 @@ Orchestrates version lifecycle management. For each version in `Module.spec.vers
 - Garbage-collects orphaned `Version` resources when versions are removed
 - Enforces `versionHistoryLimit` when configured
 
+### Provider Controller
+
+Orchestrates provider version lifecycle management. For each version in `Provider.spec.versions`, the Provider controller creates a `Version` resource for every OS/architecture combination defined in `spec.providerConfig.operatingSystems` and `spec.providerConfig.architectures`. For example, a single `Provider` with one version, two operating systems (`linux`, `darwin`), and two architectures (`amd64`, `arm64`) will produce four `Version` resources.
+
+The Provider controller:
+
+- Creates `Version` resources for each version × OS × architecture combination
+- Tracks the latest version using semantic version sorting
+- Garbage-collects orphaned `Version` resources when versions are removed
+- Enforces `versionHistoryLimit` when configured
+- Labels each `Version` with `kerrareg.io/provider=<name>` for easy filtering
+
+**Example Provider resource:**
+
+```yaml
+apiVersion: kerrareg.io/v1alpha1
+kind: Provider
+metadata:
+  name: aws
+  namespace: kerrareg-system
+spec:
+  providerConfig:
+    name: aws
+    operatingSystems:
+      - linux
+      - darwin
+    architectures:
+      - amd64
+      - arm64
+    storageConfig:
+      s3:
+        bucket: kerrareg-providers
+        region: us-west-2
+  versions:
+    - version: "5.80.0"
+    - version: "5.81.0"
+```
+
+This produces eight `Version` resources (`5.80.0-linux-amd64`, `5.80.0-linux-arm64`, `5.80.0-darwin-amd64`, `5.80.0-darwin-arm64`, and the same four for `5.81.0`). The Version controller then fetches each binary from the HashiCorp Releases API and stores it in S3 under a UUID7 filename.
+
 ### Depot Controller
 
-Automates module discovery from GitHub. The Depot controller:
+Automates module and provider discovery. The Depot controller:
 
-- Queries the GitHub Releases API for each module in `spec.moduleConfigs`
-- Resolves version constraints against available releases
-- Creates or updates `Module` resources with discovered versions
+- Queries the **GitHub Releases API** for each entry in `spec.moduleConfigs`, resolves version constraints, and creates or updates `Module` resources
+- Queries the **HashiCorp Releases API** for each entry in `spec.providerConfigs`, resolves version constraints, and creates or updates `Provider` resources
 - Supports configurable polling intervals (`pollingIntervalMinutes`)
 - Inherits `global` config (storage, GitHub auth, file format) to each module unless overridden
-- Serves as a **migration bridge** — import modules from public registries, then delete the Depot once you transition to CI/CD-driven publishing
+- Updates `status.modules` and `status.providers` with the names of all managed resources
+- Serves as a **migration bridge** — import modules and providers in bulk, then delete the Depot once you transition to CI/CD-driven publishing
 
 ### Server
 
-Implements the Module Registry Protocol as an HTTP API. The server authenticates requests using either Kubernetes bearer tokens or base64-encoded kubeconfigs, then queries the Kubernetes API for module and version data.
+Implements both the Module Registry Protocol and the Provider Registry Protocol as an HTTP API. The server authenticates requests using either Kubernetes bearer tokens or base64-encoded kubeconfigs, then queries the Kubernetes API for module, provider, and version data.
+
+Provider artifact endpoints (binary download, `SHA256SUMS`, `SHA256SUMS.sig`) are served using the server's own ServiceAccount per the [Terraform Provider Registry Protocol](https://developer.hashicorp.com/terraform/internals/provider-registry-protocol) — OpenTofu fetches these URLs without forwarding client credentials, so authentication is provided at the metadata tier rather than the artifact tier.
+> [!IMPORTANT]
+> To prevent unauthenticated users from easily enumerating provider artifacts, provider files are stored with UUID7-based filenames.
 
 ## Storage Backends
 
@@ -450,13 +510,14 @@ helm upgrade --install kerrareg chart/kerrareg \
 
 #### Controllers
 
-These values apply to `version`, `module`, and `depot` independently:
+These values apply to `version`, `module`, `depot`, and `provider` independently:
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `<service>.enabled` | `true` | Deploy the controller |
+| `<service>.enabled` | `true` (`provider`: `false`) | Deploy the controller |
 | `<service>.replicaCount` | `1` | Number of replicas |
 | `<service>.image.repository` | `ghcr.io/tonedefdev/kerrareg/<service>-controller` | Image repository |
+| `<service>.image.tag` | `""` | Overrides `global.image.tag` when set |
 | `<service>.resources.requests.cpu` | `100m` | CPU request |
 | `<service>.resources.requests.memory` | `128Mi` | Memory request |
 | `<service>.resources.limits.cpu` | `500m` | CPU limit |
@@ -464,6 +525,25 @@ These values apply to `version`, `module`, and `depot` independently:
 | `<service>.nodeSelector` | `{}` | Node selector |
 | `<service>.tolerations` | `[]` | Tolerations |
 | `<service>.affinity` | `{}` | Affinity rules |
+
+> [!NOTE]
+> The provider controller is disabled by default (`provider.enabled: false`). Enable it explicitly when you are ready to sync provider binaries — provider archives can be several hundred megabytes each.
+
+#### GPG Signing (Providers)
+
+The server signs `SHA256SUMS` files for provider packages using a GPG key you supply. OpenTofu verifies this signature as part of the [Provider Registry Protocol](https://developer.hashicorp.com/terraform/internals/provider-registry-protocol). You must create a Kubernetes Secret with the following keys and reference it via `server.gpg.secretName`:
+
+| Secret Key | Description |
+|-----------|-------------|
+| `KERRAREG_PROVIDER_GPG_KEY_ID` | Short or long hex key ID of the signing key |
+| `KERRAREG_PROVIDER_GPG_ASCII_ARMOR` | ASCII-armored public key block (included in the API response so OpenTofu can verify) |
+| `KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64` | Base64-encoded ASCII-armored private key (used by the server to sign `SHA256SUMS`) |
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `server.gpg.secretName` | `""` | Name of the Kubernetes Secret containing GPG signing credentials |
+
+See [GPG Signing for Providers](#gpg-signing-for-providers) in the Configuration section for full setup instructions.
 
 #### Service Account & RBAC
 
@@ -509,7 +589,7 @@ make deploy
 | `make service NAME=server` | Build and load a single service |
 | `make restart` | Restart all deployments in `kerrareg-system` |
 | `make redeploy` | Build, load, and restart all services |
-| `make kind-restart` | Full cluster recreation with Istio, TLS, gateway, and Helm deploy |
+| `make kind-restart` | Full cluster recreation with Istio, TLS, gateway, and Helm deploy (for production-like local setup) |
 
 **Configurable variables:**
 
@@ -522,7 +602,10 @@ make deploy
 
 ## Local Testing with kind
 
-The fastest way to try Kerrareg is with a local [kind](https://kind.sigs.k8s.io/) cluster using the filesystem storage backend and `hostPath`. This avoids any cloud provider setup — no S3 bucket, no Azure Storage Account, no credentials. You'll have a fully functional registry in minutes.
+The fastest way to try Kerrareg is with a local [kind](https://kind.sigs.k8s.io/) cluster using the filesystem storage backend and `hostPath`. This avoids any cloud provider setup — no S3 bucket, no Azure Storage Account, no credentials, no ingress controller, and no TLS certificates. You'll have a fully functional registry in minutes using `kubectl port-forward` and the public `*.localtest.me` DNS service (all `*.localtest.me` hostnames resolve to `127.0.0.1`).
+
+> [!NOTE]
+> OpenTofu and Terraform require module registry hostnames to contain at least one dot. `localhost` alone is not valid. `kerrareg.localtest.me` resolves to `127.0.0.1` via public DNS, making it a convenient dotted hostname for local testing without editing `/etc/hosts` or installing any ingress controller.
 
 ### Prerequisites
 
@@ -530,7 +613,6 @@ The fastest way to try Kerrareg is with a local [kind](https://kind.sigs.k8s.io/
 - [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [Helm 3](https://helm.sh/docs/intro/install/)
-- [cloud-provider-kind](https://github.com/kubernetes-sigs/cloud-provider-kind) (for LoadBalancer support)
 - [OpenTofu](https://opentofu.org/docs/intro/install/) or [Terraform](https://developer.hashicorp.com/terraform/install)
 
 ### Step 1: Create the Cluster
@@ -539,95 +621,18 @@ The fastest way to try Kerrareg is with a local [kind](https://kind.sigs.k8s.io/
 kind create cluster --name kerrareg
 ```
 
-### Step 2: Install Istio (Ingress)
+### Step 2: Install CRDs and Deploy with Helm
 
-Kerrareg works with any Kubernetes ingress controller — NGINX, Traefik, Contour, HAProxy, or the built-in Gateway API. This guide uses [Istio](https://istio.io/) because it provides automatic mTLS between services, fine-grained traffic policies, and TLS termination at the gateway — giving you defense-in-depth even for local testing. If you prefer a different ingress controller, set `server.ingress.istio.enabled: false` in your Helm values and configure a standard [Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/) instead.
-
-Add the Istio Helm repo and install:
+Install the CRDs, then deploy Kerrareg with filesystem storage, `hostPath` volume, and anonymous auth:
 
 ```bash
-helm repo add istio https://istio-release.storage.googleapis.com/charts
-helm repo update
+kubectl apply --server-side -f chart/kerrareg/crds/
 
-helm install istio-base istio/base -n istio-system --create-namespace --wait
-helm install istiod istio/istiod -n istio-system --wait
-
-kubectl create namespace istio-ingress
-helm install istio-ingress istio/gateway -n istio-ingress --wait
-```
-
-### Step 3: Configure TLS and the Gateway
-
-OpenTofu and Terraform **require** HTTPS when communicating with module registries — there is no way to bypass this. You must generate a TLS certificate for your registry hostname.
-
-For local testing, create a self-signed certificate with `openssl`:
-
-```bash
-openssl req -x509 -newkey rsa:2048 -nodes \
-  -keyout tls.key -out tls.crt \
-  -days 365 \
-  -subj "/CN=kerrareg.defdev.io" \
-  -addext "subjectAltName=DNS:kerrareg.defdev.io"
-```
-
-Create the Kubernetes Secret in the `istio-ingress` namespace (where the gateway reads it):
-
-```bash
-kubectl create secret tls istio-ingress-gateway-certs \
-  -n istio-ingress \
-  --cert=tls.crt \
-  --key=tls.key
-```
-
-Then trust the certificate on your machine so OpenTofu/Terraform accepts it:
-
-**macOS:**
-
-```bash
-sudo security add-trusted-cert -d -r trustRoot \
-  -k /Library/Keychains/System.keychain tls.crt
-```
-
-**Linux:**
-
-```bash
-sudo cp tls.crt /usr/local/share/ca-certificates/kerrareg.crt
-sudo update-ca-certificates
-```
-
-Apply the Istio Gateway resource:
-
-```bash
-kubectl apply -f chart/kerrareg/istio/gateway.yaml
-```
-
-Add a `/etc/hosts` entry so the hostname resolves locally (you'll update the IP in Step 6):
-
-```bash
-echo "127.0.0.1 kerrareg.defdev.io" | sudo tee -a /etc/hosts
-```
-
-### Step 4: Build and Load Images
-
-Build all container images and load them into the kind cluster:
-
-```bash
-make deploy
-```
-
-> **Apple Silicon users:** The default `PLATFORM` is `linux/arm64`. For Intel Macs or Linux, run `make deploy PLATFORM=linux/amd64`.
-
-### Step 5: Install with Helm
-
-Deploy Kerrareg with filesystem storage using `hostPath`, anonymous auth enabled (no credentials needed for testing), and the Istio ingress route:
-
-```bash
 helm upgrade --install kerrareg chart/kerrareg \
   -n kerrareg-system --create-namespace \
   --set storage.filesystem.enabled=true \
-  --set storage.filesystem.hostPath=/tmp/kerrareg-modules \
+  --set storage.filesystem.hostPath=/data/modules \
   --set server.anonymousAuth=true \
-  --set server.useBearerToken=false \
   --wait
 ```
 
@@ -637,100 +642,109 @@ Verify all pods are running:
 kubectl get pods -n kerrareg-system
 ```
 
-### Step 6: Expose the Gateway
+> **Apple Silicon users:** If building from source, the default `PLATFORM` is `linux/arm64`. For Intel Macs or Linux, run `make deploy PLATFORM=linux/amd64`.
 
-kind doesn't natively support `LoadBalancer` services. Use [cloud-provider-kind](https://github.com/kubernetes-sigs/cloud-provider-kind) to assign an external IP:
+### Step 3: Port-Forward the Server
 
-```bash
-sudo cloud-provider-kind &
-```
-
-Wait a few seconds, then find the external IP:
+In a separate terminal, forward the Kerrareg server to a local port:
 
 ```bash
-kubectl get svc -n istio-ingress
+kubectl port-forward svc/server 8080:80 -n kerrareg-system
 ```
 
-Update your `/etc/hosts` entry if the IP isn't `127.0.0.1`:
+The server is now reachable at `http://kerrareg.localtest.me:8080` — no ingress controller or TLS certificate required. OpenTofu will resolve `kerrareg.localtest.me` to `127.0.0.1` via public DNS and connect through the port-forward.
+
+Verify service discovery is working:
 
 ```bash
-# Replace <EXTERNAL-IP> with the actual IP from the command above
-sudo sed -i '' "s/.*kerrareg.defdev.io/<EXTERNAL-IP> kerrareg.defdev.io/" /etc/hosts
+curl http://kerrareg.localtest.me:8080/.well-known/terraform.json
 ```
 
-### Step 7: Apply CRDs and Create a Test Module
+Expected output:
 
-Install the CRDs and create a `Module` resource that pulls a public module from GitHub using filesystem storage:
+```json
+{"modules.v1":"/kerrareg/modules/v1/"}
+```
+
+### Step 4: Create a Test Module
+
+Apply a `Module` resource that pulls a small public module from GitHub:
 
 ```bash
-kubectl apply -f chart/kerrareg/crds/
-```
-
-```yaml
 cat <<EOF | kubectl apply -f -
 apiVersion: kerrareg.io/v1alpha1
 kind: Module
 metadata:
-  name: terraform-aws-eks
+  name: terraform-aws-key-pair
   namespace: kerrareg-system
 spec:
   moduleConfig:
-    name: terraform-aws-eks
     provider: aws
     repoOwner: terraform-aws-modules
-    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-eks
-    fileFormat: tar
+    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-key-pair
+    fileFormat: zip
     storageConfig:
       fileSystem:
         directoryPath: /data/modules
   versions:
-    - version: "21.10.1"
+    - version: "2.0.0"
 EOF
 ```
+
+> [!NOTE]
+> The Module CR name (`terraform-aws-key-pair`) must match the GitHub repository name, because the module controller uses it as the repository name when fetching archives if `spec.moduleConfig.name` is omitted.
 
 Watch the Version resource sync:
 
 ```bash
-kubectl get versions.kerrareg.io -n kerrareg-system -w
+kubectl get versions -n kerrareg-system -w
 ```
 
-Once the status shows `Synced`, the module archive has been fetched from GitHub and stored on the local filesystem.
+Once `SYNCED` shows `true`, the module archive has been fetched from GitHub and stored in the local filesystem.
 
-### Step 8: Use the Registry with OpenTofu
+### Step 5: Use the Registry with OpenTofu
 
-Fetch the port that `cloud-kind-provider` will use to forward traffic:
+Create a working directory with a Terraform/OpenTofu config and a `.tofurc` (or `.terraformrc`) that points OpenTofu at your local registry:
 
 ```bash
-docker ps --filter "name=kindccm" --format '{{.Ports}}' | sed -n 's/.*:\([0-9]*\)->443.*/\1/p'
-```
+mkdir /tmp/kerrareg-test && cd /tmp/kerrareg-test
 
-Create a test configuration with the port number added from the previous command:
-
-```hcl
-# main.tf
-module "eks" {
-  source  = "kerrareg.defdev.io:{CLOUD_PROVIDER_KIND_PORT}/kerrareg-system/terraform-aws-eks/aws"
-  version = "21.10.1"
+cat > main.tf <<'EOF'
+module "key_pair" {
+  source  = "kerrareg.localtest.me:8080/kerrareg-system/terraform-aws-key-pair/aws"
+  version = "2.0.0"
 }
+EOF
+
+cat > .tofurc <<'EOF'
+host "kerrareg.localtest.me:8080" {
+  services = {
+    "modules.v1" = "http://kerrareg.localtest.me:8080/kerrareg/modules/v1/"
+  }
+}
+EOF
+
+TF_CLI_CONFIG_FILE=.tofurc tofu init
 ```
 
-Since `anonymousAuth` is enabled, no credentials are needed. If you trusted the self-signed certificate in Step 3, just run:
+The `.tofurc` `host` block overrides the default HTTPS protocol discovery for this hostname, allowing plain HTTP over the port-forward. You should see OpenTofu download the module from your local Kerrareg instance:
 
-```bash
-tofu init -backend=false
+```
+Initializing modules...
+Downloading kerrareg.localtest.me:8080/kerrareg-system/terraform-aws-key-pair/aws 2.0.0 for key_pair...
+- key_pair in .terraform/modules/key_pair
+
+OpenTofu has been successfully initialized!
 ```
 
-You should see OpenTofu download the module from your local Kerrareg instance.
+### Step 6: (Optional) Test with Authentication
 
-### Step 9: (Optional) Test with Authentication
-
-To test Kerrareg's Kubernetes-native auth, redeploy with `anonymousAuth` disabled and bearer token auth enabled:
+To test Kerrareg's Kubernetes-native auth, redeploy with `anonymousAuth` disabled:
 
 ```bash
 helm upgrade kerrareg chart/kerrareg \
   -n kerrareg-system \
-  --set storage.filesystem.enabled=true \
-  --set storage.filesystem.hostPath=/tmp/kerrareg-modules \
+  --reuse-values \
   --set server.anonymousAuth=false \
   --set server.useBearerToken=true \
   --wait
@@ -750,27 +764,26 @@ kubectl create rolebinding test-user-reader -n kerrareg-system \
   --serviceaccount=kerrareg-system:test-user
 ```
 
-Generate a short-lived token and write it to `~/.terraform.d/credentials.tfrc.json`, using the `host:port` of your Kerrareg server as the credential key:
+Generate a short-lived token and set it in `.tofurc`:
 
 ```bash
-TOKEN=$(kubectl create token test-user -n kerrareg-system) && \
-PORT=$(docker ps --filter "name=kindccm" --format '{{.Ports}}' | sed -n 's/.*:\([0-9]*\)->443.*/\1/p') && \
-mkdir -p ~/.terraform.d && cat > ~/.terraform.d/credentials.tfrc.json <<EOF
-{
-  "credentials": {
-    "kerrareg.defdev.io:${PORT}": {
-      "token": "${TOKEN}"
-    }
+TOKEN=$(kubectl create token test-user -n kerrareg-system --duration=1h)
+
+cat > /tmp/kerrareg-test/.tofurc <<EOF
+host "kerrareg.localtest.me:8080" {
+  services = {
+    "modules.v1" = "http://kerrareg.localtest.me:8080/kerrareg/modules/v1/"
   }
+  token = "${TOKEN}"
 }
 EOF
+
+TF_CLI_CONFIG_FILE=/tmp/kerrareg-test/.tofurc tofu init
 ```
-> [!IMPORTANT]
-> Because `cloud-provider-kind` assigns a non-standard port (not `443`), you must use a `credentials.tfrc.json` file for authentication. The `TF_TOKEN_` environment variable approach does not support hostnames with port numbers.
 
 OpenTofu sends the bearer token to Kerrareg, which forwards it to the Kubernetes API for authentication and RBAC authorization. This is the same flow used in production — no separate user database or API keys required.
 
-### Step 10: (Optional) Test with a Depot
+### Step 7: (Optional) Test with a Depot
 
 To test automatic version discovery from GitHub:
 
@@ -784,26 +797,148 @@ metadata:
 spec:
   global:
     moduleConfig:
-      fileFormat: tar
+      fileFormat: zip
     storageConfig:
       fileSystem:
         directoryPath: /data/modules
   moduleConfigs:
-    - name: terraform-aws-eks
+    - name: terraform-aws-key-pair
       provider: aws
       repoOwner: terraform-aws-modules
-      versionConstraints: ">= 21.10.0, < 21.12.0"
+      versionConstraints: ">= 2.0.0, <= 2.1.1"
+  providerConfigs:
+    - name: random
+      operatingSystems:
+        - linux
+      architectures:
+        - amd64
+      versionConstraints: "= 3.6.0"
+      storageConfig:
+        fileSystem:
+          directoryPath: /data/modules
 EOF
 ```
 
-The Depot controller queries GitHub releases, creates `Module` resources for matching versions, and the pipeline syncs them to local storage automatically.
+The Depot controller queries GitHub releases for modules and the HashiCorp Releases API for providers, creates `Module` and `Provider` resources for matching versions, and the pipeline syncs them to local storage automatically.
+
+### Step 8: (Optional) Test with a Provider
+
+Providers are synced from the [HashiCorp Releases API](https://releases.hashicorp.com) and served via the [Terraform Provider Registry Protocol](https://developer.hashicorp.com/terraform/internals/provider-registry-protocol). Provider binaries can be large (the `aws` provider for a single OS/arch is ~700 MB), so this step is optional.
+
+**Step 8a: Generate a GPG key for provider signing**
+
+OpenTofu verifies a GPG signature over the `SHA256SUMS` file when installing a provider. Generate a dedicated key and store it as a Kubernetes Secret:
+
+```bash
+# Generate a key (no passphrase, batch mode)
+gpg --batch --gen-key <<EOF
+Key-Type: RSA
+Key-Length: 4096
+Name-Real: Kerrareg Local
+Name-Email: kerrareg@local.test
+Expire-Date: 0
+%no-protection
+EOF
+
+KEY_ID=$(gpg --list-keys --with-colons kerrareg@local.test | awk -F: '/^pub/{print $5}' | tail -1)
+ASCII_ARMOR=$(gpg --armor --export "$KEY_ID")
+PRIVATE_B64=$(gpg --armor --export-secret-keys "$KEY_ID" | base64 | tr -d '\n')
+
+kubectl create secret generic kerrareg-provider-gpg \
+  --namespace kerrareg-system \
+  --from-literal=KERRAREG_PROVIDER_GPG_KEY_ID="$KEY_ID" \
+  --from-literal=KERRAREG_PROVIDER_GPG_ASCII_ARMOR="$ASCII_ARMOR" \
+  --from-literal=KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64="$PRIVATE_B64"
+```
+
+**Step 8b: Redeploy Kerrareg with the provider controller and GPG secret**
+
+```bash
+helm upgrade kerrareg chart/kerrareg \
+  -n kerrareg-system \
+  --reuse-values \
+  --set provider.enabled=true \
+  --set server.gpg.secretName=kerrareg-provider-gpg \
+  --wait
+```
+
+**Step 8c: Create a Provider resource**
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: kerrareg.io/v1alpha1
+kind: Provider
+metadata:
+  name: aws
+  namespace: kerrareg-system
+spec:
+  providerConfig:
+    name: aws
+    operatingSystems:
+      - linux
+    architectures:
+      - amd64
+    storageConfig:
+      fileSystem:
+        directoryPath: /data/modules
+  versions:
+    - version: "5.80.0"
+EOF
+```
+
+Watch the Version resource sync (this downloads ~700 MB from HashiCorp):
+
+```bash
+kubectl get versions -n kerrareg-system -w
+```
+
+Once `SYNCED` shows `true`, the provider binary is stored in the local filesystem.
+
+**Step 8d: Use the provider registry with OpenTofu**
+
+```bash
+mkdir /tmp/kerrareg-provider-test && cd /tmp/kerrareg-provider-test
+
+cat > main.tf <<'EOF'
+terraform {
+  required_providers {
+    aws = {
+      source  = "kerrareg.localtest.me:8080/kerrareg-system/aws"
+      version = "5.80.0"
+    }
+  }
+}
+EOF
+
+cat > .tofurc <<'EOF'
+host "kerrareg.localtest.me:8080" {
+  services = {
+    "providers.v1" = "http://kerrareg.localtest.me:8080/kerrareg/providers/v1/"
+  }
+}
+EOF
+
+TF_CLI_CONFIG_FILE=.tofurc tofu init
+```
+
+The `.tofurc` `host` block overrides HTTPS protocol discovery for this hostname, allowing plain HTTP over the port-forward. OpenTofu will resolve `kerrareg.localtest.me` to `127.0.0.1` and install the provider from your local Kerrareg instance:
+
+```
+Initializing provider plugins...
+- Finding kerrareg.localtest.me:8080/kerrareg-system/aws versions matching "5.80.0"...
+- Installing kerrareg.localtest.me:8080/kerrareg-system/aws v5.80.0...
+- Installed kerrareg.localtest.me:8080/kerrareg-system/aws v5.80.0
+
+OpenTofu has been successfully initialized!
+```
 
 ### Cleanup
 
 ```bash
+kubectl port-forward svc/server 8080:80 -n kerrareg-system  # stop with Ctrl-C
 kind delete cluster --name kerrareg
-sudo sed -i '' '/kerrareg.defdev.io/d' /etc/hosts
 ```
+
 
 ## Configuration
 
@@ -884,6 +1019,67 @@ server:
       hosts:
         - kerrareg.defdev.io
 ```
+
+### GPG Signing for Providers
+
+The Terraform Provider Registry Protocol requires that providers ship a `SHA256SUMS` file and a detached GPG signature (`SHA256SUMS.sig`). OpenTofu downloads both and verifies the signature using the public key returned by the registry's package metadata endpoint. Kerrareg handles signing automatically — you provide the key, and the server signs on every request.
+
+**Generating a key pair**
+
+Use any GPG key management workflow you prefer. The key must have no passphrase so the server can sign without interactive input.
+
+```bash
+gpg --batch --gen-key <<EOF
+Key-Type: RSA
+Key-Length: 4096
+Name-Real: My Org Kerrareg
+Name-Email: kerrareg@myorg.io
+Expire-Date: 0
+%no-protection
+EOF
+```
+
+**Extracting key material**
+
+```bash
+KEY_ID=$(gpg --list-keys --with-colons kerrareg@myorg.io | awk -F: '/^pub/{print $5}' | tail -1)
+ASCII_ARMOR=$(gpg --armor --export "$KEY_ID")
+PRIVATE_B64=$(gpg --armor --export-secret-keys "$KEY_ID" | base64 | tr -d '\n')
+```
+
+**Creating the Kubernetes Secret**
+
+```bash
+kubectl create secret generic kerrareg-provider-gpg \
+  --namespace kerrareg-system \
+  --from-literal=KERRAREG_PROVIDER_GPG_KEY_ID="$KEY_ID" \
+  --from-literal=KERRAREG_PROVIDER_GPG_ASCII_ARMOR="$ASCII_ARMOR" \
+  --from-literal=KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64="$PRIVATE_B64"
+```
+
+**Referencing the Secret in Helm**
+
+```bash
+helm upgrade kerrareg chart/kerrareg \
+  -n kerrareg-system \
+  --reuse-values \
+  --set server.gpg.secretName=kerrareg-provider-gpg \
+  --wait
+```
+
+Or in your `values.yaml`:
+
+```yaml
+server:
+  gpg:
+    secretName: kerrareg-provider-gpg
+```
+
+> [!IMPORTANT]
+> The `KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64` value must be the base64-encoded ASCII armor of the private key (i.e., the PEM-style block is base64-encoded). The server decodes it automatically before signing. Do not store the raw private key directly.
+
+> [!NOTE]
+> The ASCII-armored **public** key (`KERRAREG_PROVIDER_GPG_ASCII_ARMOR`) is returned verbatim in the provider package metadata response so OpenTofu can verify the signature without any out-of-band key exchange. OpenTofu will prompt the user to confirm a new signing key the first time a provider is installed from this registry — this is expected behavior.
 
 ## Usage
 
@@ -1008,17 +1204,29 @@ spec:
       provider: azurerm
       repoOwner: azure
       versionConstraints: ">= 10.0.0"
+  providerConfigs:
+    - name: aws
+      operatingSystems:
+        - linux
+      architectures:
+        - amd64
+        - arm64
+      versionConstraints: ">= 5.80.0"
+      storageConfig:
+        s3:
+          bucket: kerrareg-modules
+          region: us-west-2
   pollingIntervalMinutes: 60
 ```
 
 This Depot will:
 
 1. Query the `terraform-aws-modules/terraform-aws-eks` and `azure/terraform-azurerm-aks` GitHub repositories for releases
-2. Filter releases matching the version constraints
-3. Create `Module` resources for each module
-4. The Module controller creates `Version` resources for each discovered version
-5. The Version controller fetches archives from GitHub and uploads them to the S3 bucket
-6. Re-check GitHub for new releases every 60 minutes
+2. Filter releases matching the version constraints and create `Module` resources
+3. Query the HashiCorp Releases API for the `aws` provider and create a `Provider` resource for matching versions
+4. The Module and Provider controllers create `Version` resources for each discovered version and OS/architecture
+5. The Version controller fetches archives from GitHub (modules) or HashiCorp (providers) and uploads them to the S3 bucket
+6. Re-check for new releases every 60 minutes
 
 **Polling interval:** Set `pollingIntervalMinutes` to have the Depot periodically re-query GitHub for new releases. This is especially useful for public modules where upstream maintainers publish new versions frequently. If omitted, the Depot reconciles once and does not poll.
 
@@ -1188,17 +1396,24 @@ The controller resets `forceSync` to `false` after reconciliation completes.
 
 ### Migrating to Kerrareg
 
-> **Key feature:** The Depot is designed as a migration tool, not just an ongoing automation. If you're moving from a public registry, a private registry, or any GitHub-hosted module source to Kerrareg, the Depot handles the heavy lifting — discovering versions, downloading archives, and populating your storage backend. Once everything is synced, simply delete the Depot and switch to the [push-based CI/CD workflow](#push-based-workflow-cicd-pipeline). Deleting a Depot **does not** delete the Modules it created, so your registry stays fully intact.
+> **Key feature:** The Depot is designed as a migration tool, not just an ongoing automation. Whether you're moving modules from a public or private GitHub-hosted source, or migrating providers away from the public HashiCorp registry, the Depot handles the heavy lifting — discovering versions, downloading archives, and populating your storage backend. Once everything is synced, simply delete the Depot and switch to the [push-based CI/CD workflow](#push-based-workflow-cicd-pipeline). Deleting a Depot **does not** delete the Modules or Providers it created, so your registry stays fully intact.
 
-Use the Depot to bulk-import existing modules into Kerrareg:
+**Migrating modules** — Use the Depot to bulk-import existing modules into Kerrareg:
 
 1. Create a `Depot` with broad version constraints (e.g., `">= 0.0.0"`) to pull in the full release history
 2. Wait for all versions to sync (check `Module` and `Version` status resources)
 3. Update your OpenTofu/Terraform configurations to source modules from Kerrareg
 4. Delete the Depot — all `Module` and `Version` resources remain untouched
-5. Going forward, publish new versions via your CI/CD pipeline using the [push-based workflow](#push-based-workflow-cicd-pipeline)
+5. Going forward, publish new versions via GitOps or a CI/CD workflow
 
-This pattern lets you adopt Kerrareg incrementally without disrupting existing workflows. The Depot bridges the gap between your current registry and a fully self-hosted solution.
+**Migrating providers** — Use `spec.providerConfigs` in your Depot to mirror providers from the HashiCorp Releases API into your own storage backend:
+
+1. Create a `Depot` with `providerConfigs` listing each provider, your target OS/architecture matrix, and a version constraint
+2. Wait for all `Provider` and `Version` resources to sync
+3. Update your OpenTofu/Terraform configurations to source providers from Kerrareg (see [Consuming Providers](#consuming-providers))
+4. Delete the Depot — all `Provider` and `Version` resources remain untouched
+
+This pattern lets you adopt Kerrareg incrementally without disrupting existing workflows. The Depot bridges the gap between the public registries and a fully self-hosted solution.
 
 ### Consuming Modules
 
@@ -1217,6 +1432,82 @@ module "aks" {
 ```
 
 The source format is `<registry-host>/<namespace>/<name>/<provider>`, where `<namespace>` is the Kubernetes namespace where the `Module` resource lives.
+
+### Consuming Providers
+
+Once providers are synced, declare them as required providers in your OpenTofu or Terraform configuration using the `<registry-host>/<namespace>/<name>` source format:
+
+```hcl
+terraform {
+  required_providers {
+    aws = {
+      source  = "kerrareg.defdev.io/kerrareg-system/aws"
+      version = "~> 5.80"
+    }
+    azurerm = {
+      source  = "kerrareg.defdev.io/kerrareg-system/azurerm"
+      version = ">= 4.0.0"
+    }
+  }
+}
+```
+
+The source format is `<registry-host>/<namespace>/<name>`, where `<namespace>` is the Kubernetes namespace where the `Provider` resource lives and `<name>` matches `spec.providerConfig.name` (or the `Provider` resource name if `name` is omitted).
+
+**Pointing OpenTofu at the provider registry**
+
+Because Kerrareg serves providers at a custom host, you need a `host` block in your `.tofurc` or `.terraformrc` to tell OpenTofu where the `providers.v1` API lives:
+
+```
+host "kerrareg.defdev.io" {
+  services = {
+    "providers.v1" = "https://kerrareg.defdev.io/kerrareg/providers/v1/"
+  }
+}
+```
+
+With authentication (recommended for production):
+
+```
+host "kerrareg.defdev.io" {
+  services = {
+    "providers.v1" = "https://kerrareg.defdev.io/kerrareg/providers/v1/"
+  }
+  token = "<kubernetes-bearer-token>"
+}
+```
+
+Or using the environment variable approach:
+
+```bash
+export TF_TOKEN_KERRAREG_DEFDEV_IO=$(aws eks get-token \
+  --cluster-name my-cluster \
+  --region us-west-2 \
+  --output json | jq -r '.status.token')
+
+tofu init
+```
+
+> [!NOTE]
+> Provider artifact downloads (the binary, `SHA256SUMS`, and `SHA256SUMS.sig`) do not require client authentication. OpenTofu fetches these URLs after receiving the download metadata from the auth-protected `download` endpoint, and the Terraform Provider Registry Protocol does not forward credentials to artifact URLs. The server uses its own ServiceAccount for these requests. Security is enforced at the metadata tier where the download URL is issued.
+
+**Adding a new provider version**
+
+To publish a new version, append it to `spec.versions`:
+
+```bash
+kubectl patch provider aws -n kerrareg-system \
+  --type json -p '[{"op":"add","path":"/spec/versions/-","value":{"version":"5.81.0"}}]'
+```
+
+The Provider controller creates new `Version` resources for every OS/architecture combination, and the Version controller fetches and stores the binaries automatically.
+
+**Force re-sync**
+
+```bash
+kubectl patch provider aws -n kerrareg-system \
+  --type merge -p '{"spec":{"forceSync":true}}'
+```
 
 ## Authenticating with Kerrareg
 
@@ -1345,6 +1636,7 @@ The Helm chart creates ServiceAccounts and RBAC resources for each controller au
 | Depot | `depots/finalizers` | update |
 | Depot | `depots/status` | get, patch, update |
 | Depot | `modules` | create, get, list, patch, update, watch |
+| Depot | `providers` | create, get, list, patch, update, watch |
 | Depot | `secrets` | get, list, watch |
 | Module | `modules` | create, delete, get, list, patch, update, watch |
 | Module | `modules/finalizers` | update |
@@ -1352,10 +1644,16 @@ The Helm chart creates ServiceAccounts and RBAC resources for each controller au
 | Module | `versions` | create, get, list, patch, update, watch |
 | Version | `modules` | get, list, watch |
 | Version | `modules/status` | get, patch, update |
+| Version | `providers` | get |
+| Version | `providers/status` | get, patch, update |
 | Version | `versions` | create, delete, get, list, patch, update, watch |
 | Version | `versions/finalizers` | update |
 | Version | `versions/status` | get, patch, update |
 | Version | `secrets` | get, list, watch |
+| Provider | `providers` | create, delete, get, list, patch, update, watch |
+| Provider | `providers/finalizers` | update |
+| Provider | `providers/status` | get, patch, update |
+| Provider | `versions` | create, delete, get, list, patch, update, watch |
 | Server | `versions` | get, list, watch |
 | Server | `modules` | get, list |
 
@@ -1407,7 +1705,8 @@ GET /.well-known/terraform.json
 
 ```json
 {
-  "modules.v1": "/kerrareg/modules/v1/"
+  "modules.v1": "/kerrareg/modules/v1/",
+  "providers.v1": "/kerrareg/providers/v1/"
 }
 ```
 
@@ -1435,7 +1734,7 @@ GET /kerrareg/modules/v1/{namespace}/{name}/{system}/{version}/download
 
 Returns `204 No Content` with an `X-Terraform-Get` header pointing to the storage-specific download URL. Requires authentication.
 
-### Storage Download Endpoints
+### Storage Download Endpoints (Modules)
 
 These endpoints are called by OpenTofu/Terraform after receiving the `X-Terraform-Get` redirect. They validate the SHA256 checksum and stream the module archive.
 
@@ -1445,6 +1744,103 @@ GET /kerrareg/modules/v1/download/azure/{subID}/{rg}/{account}/{accountUrl}/{nam
 GET /kerrareg/modules/v1/download/gcs/{bucket}/{name}/{fileName}?fileChecksum={checksum}
 GET /kerrareg/modules/v1/download/fileSystem/{directory}/{name}/{fileName}?fileChecksum={checksum}
 ```
+
+### List Provider Versions
+
+```
+GET /kerrareg/providers/v1/{namespace}/{type}/versions
+```
+
+Returns all available versions of a provider and the platforms each version supports. Requires authentication.
+
+**Path Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `namespace` | Kubernetes namespace of the Provider resource |
+| `type` | Provider name (e.g., `aws`, `azurerm`) |
+
+**Response:**
+
+```json
+{
+  "versions": [
+    {
+      "version": "5.80.0",
+      "protocols": ["6.0"],
+      "platforms": [
+        { "os": "linux", "arch": "amd64" },
+        { "os": "linux", "arch": "arm64" }
+      ]
+    }
+  ]
+}
+```
+
+### Provider Package Metadata
+
+```
+GET /kerrareg/providers/v1/{namespace}/{type}/{version}/download/{os}/{arch}
+```
+
+Returns the download URL, SHA256 checksum, and GPG signing key for a specific provider binary. Requires authentication.
+
+**Path Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `namespace` | Kubernetes namespace of the Provider resource |
+| `type` | Provider name |
+| `version` | Provider version |
+| `os` | Operating system (e.g., `linux`, `darwin`) |
+| `arch` | CPU architecture (e.g., `amd64`, `arm64`) |
+
+**Response:**
+
+```json
+{
+  "protocols": ["6.0"],
+  "os": "linux",
+  "arch": "amd64",
+  "filename": "terraform-provider-aws_5.80.0_linux_amd64.zip",
+  "download_url": "https://.../kerrareg/providers/v1/download/kerrareg-system/aws/5.80.0",
+  "shasum": "<hex-sha256>",
+  "shasums_url": "https://.../kerrareg/providers/v1/kerrareg-system/aws/5.80.0/SHA256SUMS/linux/amd64",
+  "shasums_signature_url": "https://.../kerrareg/providers/v1/kerrareg-system/aws/5.80.0/SHA256SUMS.sig/linux/amd64",
+  "signing_keys": {
+    "gpg_public_keys": [
+      {
+        "key_id": "<KEY_ID>",
+        "ascii_armor": "-----BEGIN PGP PUBLIC KEY BLOCK-----\n..."
+      }
+    ]
+  }
+}
+```
+
+### Provider Binary Download
+
+```
+GET /kerrareg/providers/v1/download/{namespace}/{type}/{version}
+```
+
+Streams the provider binary archive (`.zip`) directly from storage. Does **not** require client authentication — the server uses its own ServiceAccount per the Terraform Provider Registry Protocol.
+
+### Provider SHA256SUMS
+
+```
+GET /kerrareg/providers/v1/{namespace}/{type}/{version}/SHA256SUMS/{os}/{arch}
+```
+
+Returns the `SHA256SUMS` text file for the specified provider version and platform. Does **not** require client authentication.
+
+### Provider SHA256SUMS Signature
+
+```
+GET /kerrareg/providers/v1/{namespace}/{type}/{version}/SHA256SUMS.sig/{os}/{arch}
+```
+
+Returns the detached GPG signature over the `SHA256SUMS` file, signed with the key configured in `server.gpg.secretName`. Does **not** require client authentication.
 
 ## Internal Developer Portal Example
 
@@ -1509,7 +1905,8 @@ kerrareg/
 │   ├── server/                # Registry Protocol API (HTTP server)
 │   ├── version/               # Version controller (core — fetch & store)
 │   ├── module/                # Module controller (version lifecycle)
-│   └── depot/                 # Depot controller (GitHub discovery)
+│   ├── provider/              # Provider controller (version lifecycle for providers)
+│   └── depot/                 # Depot controller (GitHub + HashiCorp discovery)
 ├── Makefile                   # Build, load, deploy targets
 └── go.work                    # Go workspace (multi-module)
 ```

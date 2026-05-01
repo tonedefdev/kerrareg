@@ -1,8 +1,8 @@
-{{- if and .Values.server.enabled .Values.rbac.create }}
+{{- if and .Values.provider.enabled .Values.rbac.create }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: {{ if .Values.rbac.scopeToNamespace }}Role{{ else }}ClusterRole{{ end }}
 metadata:
-  name: server-role
+  name: provider-controller-role
   {{- if .Values.rbac.scopeToNamespace }}
   namespace: {{ .Values.global.namespace }}
   {{- end }}
@@ -10,40 +10,55 @@ rules:
 - apiGroups:
   - kerrareg.io
   resources:
-  - versions
+  - providers
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - kerrareg.io
   resources:
-  - modules
+  - providers/finalizers
   verbs:
-  - get
-  - list
+  - update
 - apiGroups:
   - kerrareg.io
   resources:
-  - providers
+  - providers/status
   verbs:
   - get
+  - patch
+  - update
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - versions
+  verbs:
+  - create
+  - delete
+  - get
   - list
+  - patch
+  - update
   - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: {{ if .Values.rbac.scopeToNamespace }}RoleBinding{{ else }}ClusterRoleBinding{{ end }}
 metadata:
-  name: server-role-binding
+  name: provider-controller-role-binding
   {{- if .Values.rbac.scopeToNamespace }}
   namespace: {{ .Values.global.namespace }}
   {{- end }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: {{ if .Values.rbac.scopeToNamespace }}Role{{ else }}ClusterRole{{ end }}
-  name: server-role
+  name: provider-controller-role
 subjects:
 - kind: ServiceAccount
-  name: server
+  name: provider-controller
   namespace: {{ .Values.global.namespace }}
 {{- end }}

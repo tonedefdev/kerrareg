@@ -1,31 +1,31 @@
-{{- if .Values.module.enabled }}
+{{- if .Values.provider.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: module-controller
+  name: provider-controller
   namespace: {{ .Values.global.namespace }}
   labels:
-    app: module-controller
+    app: provider-controller
     control-plane: controller
 spec:
-  replicas: {{ .Values.module.replicaCount }}
+  replicas: {{ .Values.provider.replicaCount }}
   selector:
     matchLabels:
-      app: module-controller
+      app: provider-controller
       control-plane: controller
   template:
     metadata:
       labels:
-        app: module-controller
+        app: provider-controller
         control-plane: controller
     spec:
-      serviceAccountName: module-controller
+      serviceAccountName: provider-controller
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
       containers:
       - name: deployment-controller
-        image: "{{ .Values.module.image.repository }}:{{ default .Values.global.image.tag .Values.module.image.tag }}"
+        image: "{{ .Values.provider.image.repository }}:{{ default .Values.global.image.tag .Values.provider.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         {{- if .Values.rbac.scopeToNamespace }}
         env:
@@ -36,16 +36,16 @@ spec:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
         resources:
-          {{- toYaml .Values.module.resources | nindent 10 }}
-      {{- with .Values.module.nodeSelector }}
+          {{- toYaml .Values.provider.resources | nindent 10 }}
+      {{- with .Values.provider.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.module.affinity }}
+      {{- with .Values.provider.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.module.tolerations }}
+      {{- with .Values.provider.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
