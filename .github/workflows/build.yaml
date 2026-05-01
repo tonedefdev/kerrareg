@@ -31,6 +31,8 @@ jobs:
             path: services/depot
           - name: server
             path: services/server
+          - name: provider-controller
+            path: services/provider
         arch:
           - amd64
           - arm64
