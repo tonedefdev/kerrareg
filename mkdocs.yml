@@ -9,8 +9,8 @@ docs_dir: docs
 
 theme:
   name: material
-  logo: img/kerrareg.svg
-  favicon: img/kerrareg.svg
+  logo: img/small_icon.svg
+  favicon: img/small_icon.svg
   palette:
     - scheme: default
       primary: white

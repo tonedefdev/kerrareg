@@ -30,7 +30,7 @@ jobs:
       - name: Prepare docs
         run: |
           mkdir -p docs/img
-          cp img/kerrareg.svg docs/img/
+          cp img/small_icon.svg docs/img/
           cp CONTRIBUTING.md docs/contributing.md
           cp chart/kerrareg/README.md docs/helm-chart.md
 
