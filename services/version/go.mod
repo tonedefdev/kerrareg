@@ -5,6 +5,7 @@ go 1.25.5
 require (
 	github.com/go-logr/logr v1.4.3
 	github.com/google/go-github/v81 v81.0.0
+	github.com/google/uuid v1.6.0
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	github.com/tonedefdev/kerrareg/api/v1alpha1 v0.0.0-20260214165229-59ed26a15d6f
@@ -83,7 +84,6 @@ require (
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/pprof v0.0.0-20250403155104-27863c87afa6 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.11 // indirect
 	github.com/googleapis/gax-go/v2 v2.16.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.3 // indirect

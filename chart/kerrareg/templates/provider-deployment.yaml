@@ -1,0 +1,52 @@
+{{- if .Values.provider.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provider-controller
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: provider-controller
+    control-plane: controller
+spec:
+  replicas: {{ .Values.provider.replicaCount }}
+  selector:
+    matchLabels:
+      app: provider-controller
+      control-plane: controller
+  template:
+    metadata:
+      labels:
+        app: provider-controller
+        control-plane: controller
+    spec:
+      serviceAccountName: provider-controller
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+      - name: deployment-controller
+        image: "{{ .Values.provider.image.repository }}:{{ default .Values.global.image.tag .Values.provider.image.tag }}"
+        imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        {{- if .Values.rbac.scopeToNamespace }}
+        env:
+        - name: WATCH_NAMESPACE
+          value: {{ .Values.global.namespace }}
+        {{- end }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+        resources:
+          {{- toYaml .Values.provider.resources | nindent 10 }}
+      {{- with .Values.provider.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.provider.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.provider.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

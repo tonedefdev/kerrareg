@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,6 +18,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"golang.org/x/crypto/openpgp"
+	k8sApiErrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -48,6 +52,11 @@ func main() {
 	r.Get("/.well-known/terraform.json", serviceDiscoveryHandler)
 	r.Get("/kerrareg/modules/v1/{namespace}/{name}/{system}/versions", getModuleVersions)
 	r.Get("/kerrareg/modules/v1/{namespace}/{name}/{system}/{version}/download", getDownloadModuleUrl)
+	r.Get("/kerrareg/providers/v1/{namespace}/{type}/versions", getProviderVersions)
+	r.Get("/kerrareg/providers/v1/{namespace}/{type}/{version}/download/{os}/{arch}", getProviderPackageMetadata)
+	r.Get("/kerrareg/providers/v1/download/{namespace}/{type}/{version}", serveProviderPackageDownload)
+	r.Get("/kerrareg/providers/v1/{namespace}/{type}/{version}/SHA256SUMS/{os}/{arch}", getProviderPackageSHA256SUMS)
+	r.Get("/kerrareg/providers/v1/{namespace}/{type}/{version}/SHA256SUMS.sig/{os}/{arch}", getProviderPackageSHA256SUMSSignature)
 
 	r.Get("/kerrareg/modules/v1/download/azure/{subID}/{rg}/{account}/{accountUrl}/{name}/{fileName}", serveModuleFromAzureBlob)
 	r.Get("/kerrareg/modules/v1/download/fileSystem/{directory}/{name}/{fileName}", serveModuleFromFileSystem)
@@ -66,7 +75,8 @@ func main() {
 }
 
 type ServiceDiscoveryResponse struct {
-	ModulesURL string `json:"modules.v1"`
+	ModulesURL   string `json:"modules.v1"`
+	ProvidersURL string `json:"providers.v1"`
 }
 
 type ModuleVersionsResponse struct {
@@ -77,12 +87,186 @@ type ModuleVersions struct {
 	Versions []kerraregv1alpha1.ModuleVersion `json:"versions"`
 }
 
+type ProviderVersionsResponse struct {
+	Versions []ProviderVersionDetails `json:"versions"`
+}
+
+type ProviderVersionDetails struct {
+	Version   string             `json:"version"`
+	Protocols []string           `json:"protocols,omitempty"`
+	Platforms []ProviderPlatform `json:"platforms,omitempty"`
+}
+
+type ProviderPlatform struct {
+	OS   string `json:"os"`
+	Arch string `json:"arch"`
+}
+
+type ProviderPackageMetadataResponse struct {
+	Protocols           []string            `json:"protocols"`
+	OS                  string              `json:"os"`
+	Arch                string              `json:"arch"`
+	Filename            string              `json:"filename"`
+	DownloadURL         string              `json:"download_url"`
+	SHASumsURL          string              `json:"shasums_url"`
+	SHASumsSignatureURL string              `json:"shasums_signature_url"`
+	SHASum              string              `json:"shasum"`
+	SigningKeys         ProviderSigningKeys `json:"signing_keys"`
+}
+
+type ProviderSigningKeys struct {
+	GPGPublicKeys []ProviderSigningKey `json:"gpg_public_keys"`
+}
+
+type ProviderSigningKey struct {
+	KeyID      string `json:"key_id"`
+	ASCIIArmor string `json:"ascii_armor"`
+	SourceURL  string `json:"source_url,omitempty"`
+}
+
 func serviceDiscoveryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	response := ServiceDiscoveryResponse{
-		ModulesURL: "/kerrareg/modules/v1/",
+		ModulesURL:   "/kerrareg/modules/v1/",
+		ProvidersURL: "/kerrareg/providers/v1/",
 	}
 	json.NewEncoder(w).Encode(response)
+}
+
+func normalizeVersion(versionString string) string {
+	return strings.TrimPrefix(strings.TrimSpace(versionString), "v")
+}
+
+func getProviderVersionResource(clientset *kubernetes.Clientset, namespace, providerType, requestedVersion string, ctxName string, ctxReq *http.Request) (*kerraregv1alpha1.Version, error) {
+	result, err := clientset.RESTClient().
+		Get().
+		AbsPath("/apis/kerrareg.io/v1alpha1").
+		Namespace(namespace).
+		Resource("versions").
+		DoRaw(ctxReq.Context())
+	if err != nil {
+		return nil, err
+	}
+
+	var versionList kerraregv1alpha1.VersionList
+	if err = json.Unmarshal(result, &versionList); err != nil {
+		return nil, fmt.Errorf("unable to unmarshal versions list for %s: %w", ctxName, err)
+	}
+
+	normalizedRequestedVersion := normalizeVersion(requestedVersion)
+	for _, item := range versionList.Items {
+		if item.Spec.ProviderConfigRef == nil || item.Spec.ProviderConfigRef.Name == nil {
+			continue
+		}
+
+		if *item.Spec.ProviderConfigRef.Name != providerType {
+			continue
+		}
+
+		if normalizeVersion(item.Spec.Version) != normalizedRequestedVersion {
+			continue
+		}
+
+		return &item, nil
+	}
+
+	return nil, nil
+}
+
+func buildDownloadPathFromVersion(versionResource *kerraregv1alpha1.Version) (string, error) {
+	var storageConfig *kerraregv1alpha1.StorageConfig
+	var name *string
+
+	if versionResource.Spec.ModuleConfigRef != nil && versionResource.Spec.ModuleConfigRef.StorageConfig != nil {
+		storageConfig = versionResource.Spec.ModuleConfigRef.StorageConfig
+		name = versionResource.Spec.ModuleConfigRef.Name
+	} else if versionResource.Spec.ProviderConfigRef != nil && versionResource.Spec.ProviderConfigRef.StorageConfig != nil {
+		storageConfig = versionResource.Spec.ProviderConfigRef.StorageConfig
+		name = versionResource.Spec.ProviderConfigRef.Name
+	}
+
+	if storageConfig == nil || name == nil || versionResource.Spec.FileName == nil {
+		return "", fmt.Errorf("storage configuration not available for version '%s'", versionResource.Name)
+	}
+
+	if storageConfig.AzureStorage != nil {
+		return fmt.Sprintf("azure/%s/%s/%s/%s/%s/%s",
+			storageConfig.AzureStorage.SubscriptionID,
+			storageConfig.AzureStorage.ResourceGroup,
+			storageConfig.AzureStorage.AccountName,
+			url.PathEscape(storageConfig.AzureStorage.AccountUrl),
+			*name,
+			*versionResource.Spec.FileName,
+		), nil
+	}
+
+	if storageConfig.FileSystem != nil && storageConfig.FileSystem.DirectoryPath != nil {
+		return fmt.Sprintf("fileSystem/%s/%s/%s",
+			base64.RawURLEncoding.EncodeToString([]byte(*storageConfig.FileSystem.DirectoryPath)),
+			*name,
+			*versionResource.Spec.FileName,
+		), nil
+	}
+
+	if storageConfig.GCS != nil {
+		return fmt.Sprintf("gcs/%s/%s/%s",
+			storageConfig.GCS.Bucket,
+			*name,
+			*versionResource.Spec.FileName,
+		), nil
+	}
+
+	if storageConfig.S3 != nil {
+		return fmt.Sprintf("s3/%s/%s/%s",
+			storageConfig.S3.Bucket,
+			storageConfig.S3.Region,
+			*storageConfig.S3.Key,
+		), nil
+	}
+
+	return "", fmt.Errorf("unsupported storage configuration for version '%s'", versionResource.Name)
+}
+
+func requestBaseURL(r *http.Request) string {
+	scheme := "https"
+	if r.TLS == nil {
+		if fwdProto := r.Header.Get("X-Forwarded-Proto"); fwdProto != "" {
+			scheme = fwdProto
+		} else {
+			scheme = "http"
+		}
+	}
+
+	return fmt.Sprintf("%s://%s", scheme, r.Host)
+}
+
+func getProviderSigningKeysFromEnv() (*ProviderSigningKeys, error) {
+	keyID := strings.TrimSpace(os.Getenv("KERRAREG_PROVIDER_GPG_KEY_ID"))
+	asciiArmor := os.Getenv("KERRAREG_PROVIDER_GPG_ASCII_ARMOR")
+	if keyID == "" || asciiArmor == "" {
+		return nil, fmt.Errorf("missing provider signing key env vars: KERRAREG_PROVIDER_GPG_KEY_ID and KERRAREG_PROVIDER_GPG_ASCII_ARMOR")
+	}
+
+	keys := &ProviderSigningKeys{
+		GPGPublicKeys: []ProviderSigningKey{
+			{
+				KeyID:      strings.ToUpper(keyID),
+				ASCIIArmor: asciiArmor,
+				SourceURL:  strings.TrimSpace(os.Getenv("KERRAREG_PROVIDER_GPG_SOURCE_URL")),
+			},
+		},
+	}
+
+	return keys, nil
+}
+
+func decodeSHA256Checksum(base64Checksum string) (string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(base64Checksum)
+	if err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(decoded), nil
 }
 
 func getModuleVersion(clientset *kubernetes.Clientset, w http.ResponseWriter, r *http.Request) (*kerraregv1alpha1.Version, error) {
@@ -248,9 +432,11 @@ func serveModuleFromFileSystem(w http.ResponseWriter, r *http.Request) {
 		if archiveType == "tar" {
 			archiveType = "tar.gz"
 		}
+
 		q.Set("archive", archiveType)
 		sourceURL := fmt.Sprintf("%s://%s/kerrareg/modules/v1/download/fileSystem/%s/%s/%s?%s",
 			scheme, r.Host, encodedDir, moduleName, fileName, q.Encode())
+
 		w.Header().Set("X-Terraform-Get", sourceURL)
 		w.WriteHeader(http.StatusOK)
 		return
@@ -511,4 +697,303 @@ func getModuleVersions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(response)
+}
+
+func getProviderVersions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	clientset, err := getKubeClientFromRequest(w, r)
+	if err != nil {
+		logger.Error("unable to generate kubeclient", "error", err)
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	providerType := chi.URLParam(r, "type")
+
+	_, err = clientset.RESTClient().
+		Get().
+		AbsPath("/apis/kerrareg.io/v1alpha1").
+		Namespace(namespace).
+		Resource("providers").
+		Name(providerType).
+		DoRaw(r.Context())
+	if err != nil {
+		if k8sApiErrors.IsNotFound(err) {
+			http.Error(w, "provider not found", http.StatusNotFound)
+			return
+		}
+
+		logger.Error("unable to get provider resource", "error", err, "namespace", namespace, "type", providerType)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	result, err := clientset.RESTClient().
+		Get().
+		AbsPath("/apis/kerrareg.io/v1alpha1").
+		Namespace(namespace).
+		Resource("versions").
+		DoRaw(r.Context())
+	if err != nil {
+		logger.Error("unable to list versions", "error", err, "namespace", namespace, "type", providerType)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var versionList kerraregv1alpha1.VersionList
+	if err = json.Unmarshal(result, &versionList); err != nil {
+		logger.Error("unable to unmarshal versions list", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	versionSet := make(map[string]struct{})
+	providerVersions := make([]ProviderVersionDetails, 0)
+	for _, item := range versionList.Items {
+		if item.Spec.ProviderConfigRef == nil || item.Spec.ProviderConfigRef.Name == nil {
+			continue
+		}
+
+		if *item.Spec.ProviderConfigRef.Name != providerType {
+			continue
+		}
+
+		normalized := normalizeVersion(item.Spec.Version)
+		if normalized == "" {
+			continue
+		}
+
+		if _, exists := versionSet[normalized]; exists {
+			continue
+		}
+
+		versionSet[normalized] = struct{}{}
+		providerVersions = append(providerVersions, ProviderVersionDetails{
+			Version: normalized,
+		})
+	}
+
+	response := ProviderVersionsResponse{Versions: providerVersions}
+	json.NewEncoder(w).Encode(response)
+}
+
+func getProviderPackageMetadata(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	clientset, err := getKubeClientFromRequest(w, r)
+	if err != nil {
+		logger.Error("unable to generate kubeclient", "error", err)
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	providerType := chi.URLParam(r, "type")
+	requestedVersion := chi.URLParam(r, "version")
+	osName := chi.URLParam(r, "os")
+	arch := chi.URLParam(r, "arch")
+
+	versionResource, err := getProviderVersionResource(clientset, namespace, providerType, requestedVersion, "provider package metadata", r)
+	if err != nil {
+		logger.Error("unable to locate provider version", "error", err, "namespace", namespace, "type", providerType, "version", requestedVersion)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if versionResource == nil {
+		http.Error(w, "provider package not found", http.StatusNotFound)
+		return
+	}
+
+	if versionResource.Spec.FileName == nil || versionResource.Status.Checksum == nil {
+		http.Error(w, "provider package metadata incomplete", http.StatusNotImplemented)
+		return
+	}
+
+	signingKeys, err := getProviderSigningKeysFromEnv()
+	if err != nil {
+		logger.Error("provider signing keys are not configured", "error", err)
+		http.Error(w, "provider signing metadata not configured", http.StatusNotImplemented)
+		return
+	}
+
+	checksumHex, err := decodeSHA256Checksum(*versionResource.Status.Checksum)
+	if err != nil {
+		logger.Error("unable to decode provider checksum", "error", err, "checksum", *versionResource.Status.Checksum)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	baseURL := requestBaseURL(r)
+	versionString := normalizeVersion(versionResource.Spec.Version)
+
+	response := ProviderPackageMetadataResponse{
+		Protocols:           []string{"5.0"},
+		OS:                  osName,
+		Arch:                arch,
+		Filename:            *versionResource.Spec.FileName,
+		DownloadURL:         fmt.Sprintf("%s/kerrareg/providers/v1/download/%s/%s/%s", baseURL, namespace, providerType, versionString),
+		SHASumsURL:          fmt.Sprintf("%s/kerrareg/providers/v1/%s/%s/%s/SHA256SUMS/%s/%s", baseURL, namespace, providerType, versionString, osName, arch),
+		SHASumsSignatureURL: fmt.Sprintf("%s/kerrareg/providers/v1/%s/%s/%s/SHA256SUMS.sig/%s/%s", baseURL, namespace, providerType, versionString, osName, arch),
+		SHASum:              checksumHex,
+		SigningKeys:         *signingKeys,
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+func serveProviderPackageDownload(w http.ResponseWriter, r *http.Request) {
+	// Provider artifact download endpoints are accessed by OpenTofu without
+	// credentials (per the Terraform Provider Registry Protocol spec). Use the
+	// server's own service account for k8s access.
+	clientset, err := generateKubeClient(nil, nil, false)
+	if err != nil {
+		logger.Error("unable to generate kubeclient for provider download", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	providerType := chi.URLParam(r, "type")
+	requestedVersion := chi.URLParam(r, "version")
+
+	versionResource, err := getProviderVersionResource(clientset, namespace, providerType, requestedVersion, "provider package download", r)
+	if err != nil {
+		logger.Error("unable to locate provider version for download", "error", err, "namespace", namespace, "type", providerType, "version", requestedVersion)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if versionResource == nil {
+		http.Error(w, "provider package not found", http.StatusNotFound)
+		return
+	}
+
+	downloadPath, err := buildDownloadPathFromVersion(versionResource)
+	if err != nil {
+		logger.Error("unable to build download path for provider package", "error", err, "version", versionResource.Name)
+		http.Error(w, "provider package download backend not implemented", http.StatusNotImplemented)
+		return
+	}
+
+	if versionResource.Status.Checksum == nil {
+		http.Error(w, "provider package checksum unavailable", http.StatusNotImplemented)
+		return
+	}
+
+	checksumQuery := url.QueryEscape(*versionResource.Status.Checksum)
+	http.Redirect(w, r, fmt.Sprintf("/kerrareg/modules/v1/download/%s?fileChecksum=%s", downloadPath, checksumQuery), http.StatusFound)
+}
+
+func getProviderPackageSHA256SUMS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+
+	// SHA256SUMS is a provider artifact endpoint fetched by OpenTofu without
+	// credentials (per the Terraform Provider Registry Protocol spec). Access to
+	// this URL is gated by the authenticated metadata endpoint that returns it.
+	clientset, err := generateKubeClient(nil, nil, false)
+	if err != nil {
+		logger.Error("unable to generate kubeclient for provider shasums", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	providerType := chi.URLParam(r, "type")
+	requestedVersion := chi.URLParam(r, "version")
+
+	versionResource, err := getProviderVersionResource(clientset, namespace, providerType, requestedVersion, "provider shasums", r)
+	if err != nil {
+		logger.Error("unable to locate provider version for shasums", "error", err, "namespace", namespace, "type", providerType, "version", requestedVersion)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if versionResource == nil || versionResource.Spec.FileName == nil || versionResource.Status.Checksum == nil {
+		http.Error(w, "provider package not found", http.StatusNotFound)
+		return
+	}
+
+	checksumHex, err := decodeSHA256Checksum(*versionResource.Status.Checksum)
+	if err != nil {
+		logger.Error("unable to decode provider checksum", "error", err, "checksum", *versionResource.Status.Checksum)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	_, _ = w.Write([]byte(fmt.Sprintf("%s  %s\n", checksumHex, *versionResource.Spec.FileName)))
+}
+
+func getProviderPackageSHA256SUMSSignature(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/octet-stream")
+
+	// SHA256SUMS.sig is a provider artifact endpoint fetched by OpenTofu without
+	// credentials (per the Terraform Provider Registry Protocol spec). Access to
+	// this URL is gated by the authenticated metadata endpoint that returns it.
+	clientset, err := generateKubeClient(nil, nil, false)
+	if err != nil {
+		logger.Error("unable to generate kubeclient for provider shasums signature", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	providerType := chi.URLParam(r, "type")
+	requestedVersion := chi.URLParam(r, "version")
+
+	versionResource, err := getProviderVersionResource(clientset, namespace, providerType, requestedVersion, "provider shasums signature", r)
+	if err != nil {
+		logger.Error("unable to locate provider version for shasums signature", "error", err, "namespace", namespace, "type", providerType, "version", requestedVersion)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if versionResource == nil || versionResource.Spec.FileName == nil || versionResource.Status.Checksum == nil {
+		http.Error(w, "provider package not found", http.StatusNotFound)
+		return
+	}
+
+	checksumHex, err := decodeSHA256Checksum(*versionResource.Status.Checksum)
+	if err != nil {
+		logger.Error("unable to decode provider checksum", "error", err, "checksum", *versionResource.Status.Checksum)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	shasumsContent := fmt.Sprintf("%s  %s\n", checksumHex, *versionResource.Spec.FileName)
+
+	privateKeyBase64 := strings.TrimSpace(os.Getenv("KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64"))
+	if privateKeyBase64 == "" {
+		http.Error(w, "provider gpg private key not configured", http.StatusNotImplemented)
+		return
+	}
+
+	privateKeyArmor, err := base64.StdEncoding.DecodeString(privateKeyBase64)
+	if err != nil {
+		logger.Error("unable to decode gpg private key", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	entityList, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(privateKeyArmor))
+	if err != nil {
+		logger.Error("unable to parse gpg private key", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if len(entityList) == 0 {
+		logger.Error("no gpg entities found in private key")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var sigBuf bytes.Buffer
+	if err = openpgp.DetachSign(&sigBuf, entityList[0], strings.NewReader(shasumsContent), nil); err != nil {
+		logger.Error("unable to sign provider shasums", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	_, _ = w.Write(sigBuf.Bytes())
 }

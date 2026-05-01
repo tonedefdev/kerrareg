@@ -1,0 +1,19 @@
+apiVersion: kerrareg.io/v1alpha1
+kind: Provider
+metadata:
+  name: aws
+  namespace: kerrareg-system
+spec:
+  providerConfig:
+    name: aws
+    operatingSystems:
+      - linux
+      - darwin
+    architectures:
+      - amd64
+      - arm64
+    storageConfig:
+      fileSystem:
+        directoryPath: /data/modules
+  versions:
+    - version: "5.80.0"

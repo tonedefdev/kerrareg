@@ -14,6 +14,9 @@ COPY services/module/go.mod services/module/go.sum services/module/
 COPY services/depot/go.mod services/depot/go.sum services/depot/
 COPY services/server/go.mod services/server/go.sum services/server/
 COPY services/version/go.mod services/version/go.sum services/version/
+COPY services/provider/go.mod services/provider/go.sum services/provider/
+COPY pkg/utils/go.mod pkg/utils/
+COPY pkg/testutils/go.mod pkg/testutils/
 
 # Download dependencies (workspace off since not all modules are copied yet)
 RUN cd services/module && GOWORK=off go mod download

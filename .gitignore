@@ -40,3 +40,4 @@ examples/internal-developer-portal/server/.env
 examples/internal-developer-portal/node_modules/
 examples/internal-developer-portal/dist/
 examples/internal-developer-portal/.envs
+examples/internal-developer-portal/.vite/*

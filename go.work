@@ -4,8 +4,11 @@ use (
 	./api/v1alpha1
 	./services/depot
 	./services/module
+	./services/provider
 	./services/server
 	./services/version
 	./pkg/storage
 	./pkg/github
+	./pkg/utils
+	./pkg/testutils
 )

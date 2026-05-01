@@ -20,7 +20,6 @@ version:
       cpu: 100m
       memory: 128Mi
     limits:
-      cpu: 500m
       memory: 512Mi
   nodeSelector: {}
   tolerations: []
@@ -32,12 +31,12 @@ module:
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/kerrareg/module-controller
+    tag: ""  # Overrides global.image.tag when set
   resources:
     requests:
       cpu: 100m
       memory: 128Mi
     limits:
-      cpu: 500m
       memory: 512Mi
   nodeSelector: {}
   tolerations: []
@@ -49,12 +48,29 @@ depot:
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/kerrareg/depot-controller
+    tag: ""  # Overrides global.image.tag when set
   resources:
     requests:
       cpu: 100m
       memory: 128Mi
     limits:
-      cpu: 500m
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+## Provider Service (Manages provider versions from HashiCorp Releases API)
+provider:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ghcr.io/tonedefdev/kerrareg/provider-controller
+    tag: ""  # Overrides global.image.tag when set
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
       memory: 512Mi
   nodeSelector: {}
   tolerations: []
@@ -68,6 +84,7 @@ server:
   useBearerToken: true
   image:
     repository: ghcr.io/tonedefdev/kerrareg/server
+    tag: ""  # Overrides global.image.tag when set
   service:
     type: LoadBalancer
     port: 80
@@ -75,7 +92,7 @@ server:
   ingress:
     enabled: false
     istio:
-      enabled: true
+      enabled: false
       hosts:
       - kerrareg.defdev.io
       gateway: istio-ingress/istio-ingress-gateway
@@ -90,12 +107,16 @@ server:
     enabled: false
     certPath: /etc/tls/tls.crt
     keyPath: /etc/tls/tls.key
+  gpg:
+    # Name of a Kubernetes Secret containing the GPG env vars for provider signing.
+    # The secret must have keys: KERRAREG_PROVIDER_GPG_KEY_ID, KERRAREG_PROVIDER_GPG_ASCII_ARMOR,
+    # KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64, and optionally KERRAREG_PROVIDER_GPG_SOURCE_URL.
+    secretName: ""
   resources:
     requests:
       cpu: 100m
       memory: 128Mi
     limits:
-      cpu: 500m
       memory: 512Mi
   nodeSelector: {}
   tolerations: []

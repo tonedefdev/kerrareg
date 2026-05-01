@@ -25,7 +25,7 @@ spec:
         runAsUser: 65532
       containers:
       - name: deployment-controller
-        image: "{{ .Values.module.image.repository }}:{{ .Values.global.image.tag }}"
+        image: "{{ .Values.module.image.repository }}:{{ default .Values.global.image.tag .Values.module.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
         {{- if .Values.rbac.scopeToNamespace }}
         env:

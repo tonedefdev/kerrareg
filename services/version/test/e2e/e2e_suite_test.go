@@ -1,5 +1,5 @@
 /*
-Copyright 2025 Anthony Owens.
+Copyright 2026 Tony Owens.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,70 +20,163 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/tonedefdev/kerrareg/services/version/test/utils"
+	utils "github.com/tonedefdev/kerrareg/pkg/testutils"
 )
 
 var (
-	// Optional Environment Variables:
-	// - CERT_MANAGER_INSTALL_SKIP=true: Skips CertManager installation during test setup.
-	// These variables are useful if CertManager is already installed, avoiding
-	// re-installation and conflicts.
-	skipCertManagerInstall = os.Getenv("CERT_MANAGER_INSTALL_SKIP") == "true"
-	// isCertManagerAlreadyInstalled will be set true when CertManager CRDs be found on the cluster
-	isCertManagerAlreadyInstalled = false
+	// projectImage is the version controller image to deploy for e2e tests.
+	// Override with the IMG environment variable.
+	projectImage = func() string {
+		if img := os.Getenv("IMG"); img != "" {
+			return img
+		}
+		return "version-controller:e2e-test"
+	}()
 
-	// projectImage is the name of the image which will be build and loaded
-	// with the code source changes to be tested.
-	projectImage = "example.com/kerrareg:v0.0.1"
+	// moduleImage is the module controller image to deploy for e2e tests.
+	moduleImage = "module-controller:e2e-test"
+
+	// serverImage is the server image to deploy for e2e tests.
+	serverImage = "server:e2e-test"
 )
 
-// TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
-// temporary environment to validate project changes with the purposed to be used in CI jobs.
-// The default setup requires Kind, builds/loads the Manager Docker image locally, and installs
-// CertManager.
+const (
+	// helmReleaseName is the existing Helm release that owns module/version/server.
+	helmReleaseName = "kerrareg"
+)
+
+// TestE2E runs the end-to-end test suite for the version controller.
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
-	_, _ = fmt.Fprintf(GinkgoWriter, "Starting kerrareg integration test suite\n")
+	_, _ = fmt.Fprintf(GinkgoWriter, "Starting kerrareg version e2e test suite\n")
 	RunSpecs(t, "e2e suite")
 }
 
 var _ = BeforeSuite(func() {
-	By("building the manager(Operator) image")
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectImage))
-	_, err := utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")
+	repoRoot, err := utils.GetRepoRoot()
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to determine repo root")
 
-	// TODO(user): If you want to change the e2e test vendor from Kind, ensure the image is
-	// built and available before running the tests. Also, remove the following block.
-	By("loading the manager(Operator) image on Kind")
+	By("building the version controller image")
+	buildCmd := exec.Command("docker", "build",
+		"-t", projectImage,
+		"-f", "services/version/Dockerfile",
+		".",
+	)
+	_, err = utils.RunAt(buildCmd, repoRoot)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the version controller image")
+
+	By("building the module controller image")
+	moduleBuildCmd := exec.Command("docker", "build",
+		"-t", moduleImage,
+		"-f", "services/module/Dockerfile",
+		".",
+	)
+	_, err = utils.RunAt(moduleBuildCmd, repoRoot)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the module controller image")
+
+	By("building the server image")
+	serverBuildCmd := exec.Command("docker", "build",
+		"-t", serverImage,
+		"-f", "services/server/Dockerfile",
+		".",
+	)
+	_, err = utils.RunAt(serverBuildCmd, repoRoot)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the server image")
+
+	By("loading the version controller image on Kind")
 	err = utils.LoadImageToKindClusterWithName(projectImage)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager(Operator) image into Kind")
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the version controller image into Kind")
 
-	// The tests-e2e are intended to run on a temporary cluster that is created and destroyed for testing.
-	// To prevent errors when tests run in environments with CertManager already installed,
-	// we check for its presence before execution.
-	// Setup CertManager before the suite if not skipped and if not already installed
-	if !skipCertManagerInstall {
-		By("checking if cert manager is installed already")
-		isCertManagerAlreadyInstalled = utils.IsCertManagerCRDsInstalled()
-		if !isCertManagerAlreadyInstalled {
-			_, _ = fmt.Fprintf(GinkgoWriter, "Installing CertManager...\n")
-			Expect(utils.InstallCertManager()).To(Succeed(), "Failed to install CertManager")
-		} else {
-			_, _ = fmt.Fprintf(GinkgoWriter, "WARNING: CertManager is already installed. Skipping installation...\n")
-		}
-	}
+	By("loading the module controller image on Kind")
+	err = utils.LoadImageToKindClusterWithName(moduleImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the module controller image into Kind")
+
+	By("loading the server image on Kind")
+	err = utils.LoadImageToKindClusterWithName(serverImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the server image into Kind")
+
+	By("ensuring all chart CRDs are installed")
+	allCRDsPath := filepath.Join(repoRoot, "chart", "kerrareg", "crds")
+	cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", allCRDsPath)
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to apply chart CRDs")
+
+	By("ensuring namespace exists before installing chart")
+	cmd = exec.Command("kubectl", "create", "namespace", namespace)
+	_, _ = utils.Run(cmd) // ignore error if namespace already exists
+
+	By("upgrading Helm release to configure version controller with local images")
+	chartPath, err := utils.GetChartPath()
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+
+	versionRepo, versionTag := splitImageRef(projectImage)
+	moduleRepo, moduleTag := splitImageRef(moduleImage)
+	serverRepo, serverTag := splitImageRef(serverImage)
+
+	cmd = exec.Command("helm", "upgrade", helmReleaseName, chartPath,
+		"--install",
+		"--create-namespace",
+		"--namespace", namespace,
+		"--skip-crds",
+		"--set", "module.enabled=true",
+		"--set", fmt.Sprintf("module.image.repository=%s", moduleRepo),
+		"--set", fmt.Sprintf("module.image.tag=%s", moduleTag),
+		"--set", fmt.Sprintf("version.image.repository=%s", versionRepo),
+		"--set", fmt.Sprintf("version.image.tag=%s", versionTag),
+		"--set", "server.anonymousAuth=true",
+		"--set", fmt.Sprintf("server.image.repository=%s", serverRepo),
+		"--set", fmt.Sprintf("server.image.tag=%s", serverTag),
+		"--set", "storage.filesystem.enabled=true",
+		"--set", "storage.filesystem.hostPath=/data/modules",
+		"--wait",
+		"--timeout", "3m",
+	)
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to upgrade Helm release")
 })
 
 var _ = AfterSuite(func() {
-	// Teardown CertManager after the suite if not skipped and if it was not already installed
-	if !skipCertManagerInstall && !isCertManagerAlreadyInstalled {
-		_, _ = fmt.Fprintf(GinkgoWriter, "Uninstalling CertManager...\n")
-		utils.UninstallCertManager()
+	By("resetting Helm release to remove version e2e overrides")
+	chartPath, err := utils.GetChartPath()
+	if err == nil {
+		cmd := exec.Command("helm", "upgrade", helmReleaseName, chartPath,
+			"--namespace", namespace,
+			"--reuse-values",
+			"--set", "module.enabled=true",
+			"--set", fmt.Sprintf("module.image.repository=%s", "ghcr.io/tonedefdev/kerrareg/module-controller"),
+			"--set", "module.image.tag=",
+			"--set", "server.anonymousAuth=false",
+			"--set", fmt.Sprintf("server.image.repository=%s", "ghcr.io/tonedefdev/kerrareg/server"),
+			"--set", "server.image.tag=",
+			"--set", fmt.Sprintf("version.image.repository=%s", "ghcr.io/tonedefdev/kerrareg/version-controller"),
+			"--set", "version.image.tag=",
+			"--set", "storage.filesystem.enabled=false",
+			"--set", "storage.filesystem.hostPath=",
+			"--wait",
+			"--timeout", "2m",
+		)
+		_, _ = utils.Run(cmd)
 	}
 })
+
+// splitImageRef splits an image reference "repo:tag" into its components.
+// If no tag is present, "latest" is returned as the tag.
+func splitImageRef(ref string) (repo, tag string) {
+	lastColon := -1
+	for i := len(ref) - 1; i >= 0; i-- {
+		if ref[i] == ':' {
+			lastColon = i
+			break
+		}
+	}
+	if lastColon < 0 {
+		return ref, "latest"
+	}
+	return ref[:lastColon], ref[lastColon+1:]
+}

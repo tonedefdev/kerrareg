@@ -28,7 +28,9 @@ type DepotSpec struct {
 	// of this Depot.
 	GlobalConfig *GlobalConfig `json:"global,omitempty"`
 	// The module configuration and version details for each module that should be managed by the Depot controller.
-	ModuleConfigs []ModuleConfig `json:"moduleConfigs"`
+	ModuleConfigs []ModuleConfig `json:"moduleConfigs,omitempty"`
+	// The provider configuration and version details for each provider that should be managed by the Depot controller.
+	ProviderConfigs []ProviderConfig `json:"providerConfigs,omitempty"`
 	// The polling interval in minutes for how often the Depot controller should check for new versions of the modules it manages.
 	// If not specified, the default is 0.
 	PollingIntervalMinutes *int `json:"pollingIntervalMinutes,omitempty"`
@@ -45,6 +47,8 @@ type GlobalConfig struct {
 type DepotStatus struct {
 	// The list of Module resource names created and managed by this Depot.
 	Modules []string `json:"modules,omitempty"`
+	// The list of Provider resource names created and managed by this Depot.
+	Providers []string `json:"providers,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -174,10 +178,92 @@ type ModuleVersion struct {
 	Version string `json:"version,omitempty"`
 }
 
+// ProviderConfig is the configuration settings for the Provider and for each Version created by the Provider controller.
+type ProviderConfig struct {
+	// The name of the provider. If omitted, the name of the Provider resource
+	// is used in its place.
+	Name *string `json:"name,omitempty"`
+	// The OS(s) that the provider supports. This is used to set the 'os' constraint in the provider's versions.
+	OperatingSystems []string `json:"operatingSystems,omitempty"`
+	// The architecture(s) that the provider supports. This is used to set the 'arch' constraint in the provider's versions.
+	Architectures []string `json:"architectures,omitempty"`
+	// The external storage configuration settings.
+	StorageConfig *StorageConfig `json:"storageConfig,omitempty"`
+	// The version history limit for the provider.
+	VersionHistoryLimit *int `json:"versionHistoryLimit,omitempty"`
+	// A comma-separated list of version constraints such as
+	// '1.2.1' or '>= 1.0.0, < 2.0.0' or '~> 1.0.0'. This field is only
+	// respected by the Depot controller.
+	VersionConstraints string `json:"versionConstraints,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="LatestVersion",type="string",JSONPath=".status.latestVersion",description="The latest version of the provider"
+// +kubebuilder:printcolumn:name="Name",type="string",JSONPath=".spec.providerConfig.name",description="The name of the provider"
+// +kubebuilder:printcolumn:name="Synced",type="string",JSONPath=".status.synced",description="Whether the Provider has synced successfully"
+
+// Provider is the Schema for the Providers API.
+type Provider struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   ProviderSpec   `json:"spec,omitempty"`
+	Status ProviderStatus `json:"status,omitempty"`
+}
+
+// ProviderSpec defines the desired state of a Kerrareg Provider.
+type ProviderSpec struct {
+	// A flag to force a provider to synchronize
+	ForceSync bool `json:"forceSync,omitempty"`
+	// The configuration details for the provider that will be used to create each ProviderVersion
+	ProviderConfig ProviderConfig `json:"providerConfig"`
+	// The version of the provider. This should be a list of maps with semantic version tags. For example, 'version: v1.0.0', or 'version: 1.0.0'.
+	// The version controller will automatically trim any leading 'v' character to make them compatible
+	// with the registry protocol
+	Versions []ProviderVersion `json:"versions"`
+}
+
+// ProviderStatus defines the observed state of a provider.
+type ProviderStatus struct {
+	// The latest available version of the provider
+	LatestVersion *string `json:"latestVersion,omitempty"`
+	// The randomly generated filename with its file extension.
+	FileName string `json:"fileName,omitempty"`
+	// A flag to determine if the provider has successfully synced to its desired state
+	Synced bool `json:"synced"`
+	// A field for declaring current status information about how the resource is being reconciled
+	SyncStatus string `json:"syncStatus"`
+	// A slice of the ProviderVersionRefs that have been successfully created by the controller
+	ProviderVersionRefs map[string]*ProviderVersion `json:"providerVersionRefs,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// ProviderList contains a list of Provider.
+type ProviderList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Provider `json:"items"`
+}
+
+// ProviderVersion holds details about the Version resource under management.
+type ProviderVersion struct {
+	// The system architecture this Version of the Provider supports.
+	Architecture string `json:"architecture,omitempty"`
+	// The name of the provider.
+	Name string `json:"name,omitempty"`
+	// The operating system this Version of the Provider supports.
+	OperatingSystem string `json:"operatingSystem,omitempty"`
+	// Whether the Version for the Provider has synced or not.
+	Synced bool `json:"synced,omitempty"`
+	// The version of the provider.
+	Version string `json:"version,omitempty"`
+}
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Type",type="string",JSONPath=".spec.type",description="The type of resource. Either 'Module' or 'Provider'"
-// +kubebuilder:printcolumn:name="FileName",type="string",JSONPath=".spec.fileName",description="The auto generated file name for the Version"
 // +kubebuilder:printcolumn:name="Synced",type="string",JSONPath=".status.synced",description="Whether the Version has synced successfully"
 // +kubebuilder:printcolumn:name="Checksum",type="string",JSONPath=".status.checksum",description="The base64 encoded SHA256 checksum of the file Version"
 
@@ -192,6 +278,8 @@ type Version struct {
 
 // VersionSpec defines a specific version of a Kerrareg Module or Provider.
 type VersionSpec struct {
+	// The system architecture this Version of the Provider supports.
+	Architecture string `json:"architecture,omitempty"`
 	// The name of the file with its extension.
 	// For a Module the file extension must be one of .zip or .tar.gz
 	// since terraform/tofu currently only support these two
@@ -203,6 +291,8 @@ type VersionSpec struct {
 	ModuleConfigRef *ModuleConfig `json:"moduleConfigRef,omitempty"`
 	// The reference to the Provider resource's config.
 	ProviderConfigRef *ProviderConfig `json:"providerConfigRef,omitempty"`
+	// The operating system this Version of the Provider supports.
+	OperatingSystem string `json:"operatingSystem,omitempty"`
 	// The type of resource. Either 'Module' or 'Provider'
 	Type string `json:"type"`
 	// The version of the Module or Provider.
@@ -226,13 +316,6 @@ type VersionList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Version `json:"items"`
-}
-
-// ProviderConfig is the configuration settings for the Provider and for each
-// Version created by the Provider controller.
-type ProviderConfig struct {
-	// The name of the provider.
-	Name *string `json:"name,omitempty"`
 }
 
 // The configuration settings for storing the module in an Amazon S3 bucket.
@@ -282,5 +365,6 @@ type FileSystemConfig struct {
 func init() {
 	SchemeBuilder.Register(&Depot{}, &DepotList{})
 	SchemeBuilder.Register(&Module{}, &ModuleList{})
+	SchemeBuilder.Register(&Provider{}, &ProviderList{})
 	SchemeBuilder.Register(&Version{}, &VersionList{})
 }

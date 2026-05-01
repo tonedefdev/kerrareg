@@ -1,5 +1,5 @@
 /*
-Copyright 2025 Anthony Owens.
+Copyright 2026 Tony Owens.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,313 +17,355 @@ limitations under the License.
 package e2e
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/tonedefdev/kerrareg/services/module/test/utils"
+	utils "github.com/tonedefdev/kerrareg/pkg/testutils"
 )
 
-// namespace where the project is deployed in
+// namespace where the project is deployed in.
 const namespace = "kerrareg-system"
 
-// serviceAccountName created for the project
-const serviceAccountName = "kerrareg-controller-manager"
+var _ = Describe("Module", Ordered, func() {
+	const (
+		moduleNamespace       = "kerrareg-system"
+		serverPortForwardPort = "18080"
+		// OpenTofu requires a module registry hostname with at least one dot.
+		// kerrareg.localtest.me resolves to 127.0.0.1 via public DNS (localtest.me service).
+		registryHost        = "kerrareg.localtest.me:18080"
+		moduleCRName        = "terraform-aws-key-pair"
+		moduleVersion       = "2.0.0"
+		moduleVersionCRName = "terraform-aws-key-pair-2.0.0"
+		moduleProvider      = "aws"
+		moduleStoragePath   = "/data/modules"
+	)
 
-// metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "kerrareg-controller-manager-metrics-service"
+	var pfCancel context.CancelFunc
 
-// metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
-const metricsRoleBindingName = "kerrareg-metrics-binding"
-
-var _ = Describe("Manager", Ordered, func() {
-	var controllerPodName string
-
-	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
-	// and deploying the controller.
 	BeforeAll(func() {
-		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
+		By("applying the test Module CR")
+		moduleYAML := fmt.Sprintf(`
+apiVersion: kerrareg.io/v1alpha1
+kind: Module
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  moduleConfig:
+    fileFormat: zip
+    githubClientConfig:
+      useAuthenticatedClient: false
+    provider: %s
+    repoOwner: terraform-aws-modules
+    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-key-pair
+    storageConfig:
+      fileSystem:
+        directoryPath: %s
+  versions:
+    - version: "%s"
+`, moduleCRName, moduleNamespace, moduleProvider, moduleStoragePath, moduleVersion)
+
+		moduleFile := filepath.Join(GinkgoT().TempDir(), "test-module.yaml")
+		Expect(os.WriteFile(moduleFile, []byte(moduleYAML), 0600)).To(Succeed())
+		cmd := exec.Command("kubectl", "apply", "-f", moduleFile)
 		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
+		Expect(err).NotTo(HaveOccurred(), "Failed to apply test Module CR")
 
-		By("labeling the namespace to enforce the restricted security policy")
-		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-			"pod-security.kubernetes.io/enforce=restricted")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
-
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
-
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+		By("starting port-forward to the kerrareg server")
+		pfCtx, cancel := context.WithCancel(context.Background())
+		pfCancel = cancel
+		pfCmd := exec.CommandContext(pfCtx, "kubectl", "port-forward",
+			"svc/server",
+			fmt.Sprintf("%s:80", serverPortForwardPort),
+			"-n", moduleNamespace,
+		)
+		Expect(pfCmd.Start()).To(Succeed(), "Failed to start port-forward")
+		// Allow port-forward to establish.
+		time.Sleep(3 * time.Second)
 	})
 
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
 	AfterAll(func() {
-		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
-		_, _ = utils.Run(cmd)
-
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
-
-		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
-		_, _ = utils.Run(cmd)
-	})
-
-	// After each test, check for failures and collect logs, events,
-	// and pod descriptions for debugging.
-	AfterEach(func() {
-		specReport := CurrentSpecReport()
-		if specReport.Failed() {
-			By("Fetching controller manager pod logs")
-			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-			controllerLogs, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n %s", controllerLogs)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Controller logs: %s", err)
-			}
-
-			By("Fetching Kubernetes events")
-			cmd = exec.Command("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
-			eventsOutput, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Kubernetes events:\n%s", eventsOutput)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Kubernetes events: %s", err)
-			}
-
-			By("Fetching curl-metrics logs")
-			cmd = exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-			metricsOutput, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Metrics logs:\n %s", metricsOutput)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get curl-metrics logs: %s", err)
-			}
-
-			By("Fetching controller manager pod description")
-			cmd = exec.Command("kubectl", "describe", "pod", controllerPodName, "-n", namespace)
-			podDescription, err := utils.Run(cmd)
-			if err == nil {
-				fmt.Println("Pod description:\n", podDescription)
-			} else {
-				fmt.Println("Failed to describe controller pod")
-			}
+		if pfCancel != nil {
+			pfCancel()
 		}
+		cmd := exec.Command("kubectl", "delete", "module", moduleCRName,
+			"-n", moduleNamespace, "--ignore-not-found",
+		)
+		_, _ = utils.Run(cmd)
 	})
 
-	SetDefaultEventuallyTimeout(2 * time.Minute)
-	SetDefaultEventuallyPollingInterval(time.Second)
-
-	Context("Manager", func() {
-		It("should run successfully", func() {
-			By("validating that the controller-manager pod is running as expected")
-			verifyControllerUp := func(g Gomega) {
-				// Get the name of the controller-manager pod
-				cmd := exec.Command("kubectl", "get",
-					"pods", "-l", "control-plane=controller-manager",
-					"-o", "go-template={{ range .items }}"+
-						"{{ if not .metadata.deletionTimestamp }}"+
-						"{{ .metadata.name }}"+
-						"{{ \"\\n\" }}{{ end }}{{ end }}",
-					"-n", namespace,
-				)
-
-				podOutput, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve controller-manager pod information")
-				podNames := utils.GetNonEmptyLines(podOutput)
-				g.Expect(podNames).To(HaveLen(1), "expected 1 controller pod running")
-				controllerPodName = podNames[0]
-				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
-
-				// Validate the pod's status
-				cmd = exec.Command("kubectl", "get",
-					"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
-					"-n", namespace,
-				)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Running"), "Incorrect controller-manager pod status")
-			}
-			Eventually(verifyControllerUp).Should(Succeed())
-		})
-
-		It("should ensure the metrics endpoint is serving metrics", func() {
-			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=kerrareg-metrics-reader",
-				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
+	It("should create Version CRs for the module", func() {
+		By("waiting for Version CRs to be created")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "versions",
+				"-l", fmt.Sprintf("kerrareg.io/module=%s", moduleCRName),
+				"-n", moduleNamespace,
+				"--no-headers",
 			)
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
+			output, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			lines := utils.GetNonEmptyLines(output)
+			g.Expect(lines).NotTo(BeEmpty(), "expected at least one Version CR")
+		}, 60*time.Second, 3*time.Second).Should(Succeed())
+	})
 
-			By("validating that the metrics service is available")
-			cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Metrics service should exist")
+	It("should sync the module artifact", func() {
+		By("waiting for Version CR to report synced=true (downloads from GitHub)")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "version", moduleVersionCRName,
+				"-n", moduleNamespace,
+				"-o", `jsonpath={.status.synced}`,
+			)
+			output, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(output).To(Equal("true"))
+		}, 5*time.Minute, 10*time.Second).Should(Succeed())
+	})
 
-			By("getting the service account token")
-			token, err := serviceAccountToken()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(token).NotTo(BeEmpty())
+	It("should serve module registry API endpoints", func() {
+		// The module sync downloads from GitHub, which can take several minutes.
+		// The port-forward may have died during that wait, so restart it here.
+		By("refreshing port-forward after artifact sync")
+		if pfCancel != nil {
+			pfCancel()
+		}
+		time.Sleep(2 * time.Second)
+		pfCtx, pfCancelNew := context.WithCancel(context.Background())
+		pfCancel = pfCancelNew
+		pfRefreshCmd := exec.CommandContext(pfCtx, "kubectl", "port-forward",
+			"svc/server",
+			fmt.Sprintf("%s:80", serverPortForwardPort),
+			"-n", moduleNamespace,
+		)
+		Expect(pfRefreshCmd.Start()).To(Succeed(), "Failed to restart port-forward before API tests")
 
-			By("waiting for the metrics endpoint to be ready")
-			verifyMetricsEndpointReady := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "endpoints", metricsServiceName, "-n", namespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("8443"), "Metrics endpoint is not ready")
+		base := fmt.Sprintf("http://localhost:%s", serverPortForwardPort)
+
+		By("waiting for port-forward to become ready")
+		Eventually(func() error {
+			resp, err := http.Get(base + "/.well-known/terraform.json") //nolint:noctx
+			if err != nil {
+				return err
 			}
-			Eventually(verifyMetricsEndpointReady).Should(Succeed())
-
-			By("verifying that the controller manager is serving the metrics server")
-			verifyMetricsServerStarted := func(g Gomega) {
-				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("controller-runtime.metrics\tServing metrics server"),
-					"Metrics server not yet started")
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("unexpected status %d", resp.StatusCode)
 			}
-			Eventually(verifyMetricsServerStarted).Should(Succeed())
+			return nil
+		}, 30*time.Second, 2*time.Second).Should(Succeed(), "port-forward did not become ready within 30s")
 
-			By("creating the curl-metrics pod to access the metrics endpoint")
-			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
-				"--namespace", namespace,
-				"--image=curlimages/curl:latest",
-				"--overrides",
-				fmt.Sprintf(`{
-					"spec": {
-						"containers": [{
-							"name": "curl",
-							"image": "curlimages/curl:latest",
-							"command": ["/bin/sh", "-c"],
-							"args": ["curl -v -k -H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics"],
-							"securityContext": {
-								"allowPrivilegeEscalation": false,
-								"capabilities": {
-									"drop": ["ALL"]
-								},
-								"runAsNonRoot": true,
-								"runAsUser": 1000,
-								"seccompProfile": {
-									"type": "RuntimeDefault"
-								}
-							}
-						}],
-						"serviceAccount": "%s"
-					}
-				}`, token, metricsServiceName, namespace, serviceAccountName))
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
+		By("checking /.well-known/terraform.json")
+		body := httpGetBody(base + "/.well-known/terraform.json")
+		Expect(body).To(ContainSubstring("modules.v1"))
 
-			By("waiting for the curl-metrics pod to complete.")
-			verifyCurlUp := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
-					"-o", "jsonpath={.status.phase}",
-					"-n", namespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Succeeded"), "curl pod in wrong status")
+		By("checking module versions list endpoint")
+		body = httpGetBody(fmt.Sprintf("%s/kerrareg/modules/v1/%s/%s/%s/versions",
+			base, moduleNamespace, moduleCRName, moduleProvider))
+		Expect(body).To(ContainSubstring(moduleVersion))
+
+		By("checking module download endpoint returns X-Terraform-Get header")
+		resp := httpGetRaw(fmt.Sprintf("%s/kerrareg/modules/v1/%s/%s/%s/%s/download",
+			base, moduleNamespace, moduleCRName, moduleProvider, moduleVersion))
+		defer resp.Body.Close()
+		Expect(resp.StatusCode).To(Equal(http.StatusNoContent))
+		Expect(resp.Header.Get("X-Terraform-Get")).To(ContainSubstring("/kerrareg/modules/v1/download/"))
+	})
+
+	It("should successfully run tofu init against the kerrareg registry", func() {
+		By("creating a temp directory with a Terraform config")
+		tmpDir := GinkgoT().TempDir()
+
+		mainTF := fmt.Sprintf(`module "key_pair" {
+  source  = "%s/%s/%s/%s"
+  version = "%s"
+}
+`, registryHost, moduleNamespace, moduleCRName, moduleProvider, moduleVersion)
+		Expect(os.WriteFile(filepath.Join(tmpDir, "main.tf"), []byte(mainTF), 0600)).To(Succeed())
+
+		By("writing a .tofurc to point at the local module registry")
+		tofuRC := fmt.Sprintf(`host "%s" {
+  services = {
+    "modules.v1" = "http://%s/kerrareg/modules/v1/"
+  }
+}
+`, registryHost, registryHost)
+		tofuRCPath := filepath.Join(tmpDir, ".tofurc")
+		Expect(os.WriteFile(tofuRCPath, []byte(tofuRC), 0600)).To(Succeed())
+
+		By("running tofu init")
+		cmd := exec.Command("tofu", "init", "-no-color")
+		cmd.Dir = tmpDir
+		cmd.Env = append(os.Environ(),
+			fmt.Sprintf("TF_CLI_CONFIG_FILE=%s", tofuRCPath),
+		)
+		output, err := cmd.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(),
+			"tofu init failed; output:\n%s", string(output))
+		Expect(string(output)).To(ContainSubstring("successfully initialized"))
+	})
+
+	It("should enforce Kubernetes RBAC when anonymousAuth is disabled", func() {
+		const (
+			authTestSA   = "kerrareg-e2e-reader"
+			authTestRole = "kerrareg-e2e-reader"
+			authTestRB   = "kerrareg-e2e-reader"
+		)
+
+		chartPath, err := utils.GetChartPath()
+		Expect(err).NotTo(HaveOccurred())
+
+		DeferCleanup(func() {
+			By("restoring anonymous auth after auth test")
+			restoreCmd := exec.Command("helm", "upgrade", helmReleaseName, chartPath,
+				"--namespace", moduleNamespace,
+				"--reuse-values",
+				"--set", "server.anonymousAuth=true",
+				"--set", "server.useBearerToken=false",
+				"--wait",
+				"--timeout", "2m",
+			)
+			_, _ = utils.Run(restoreCmd)
+
+			By("restarting port-forward after restoring anonymous auth")
+			if pfCancel != nil {
+				pfCancel()
 			}
-			Eventually(verifyCurlUp, 5*time.Minute).Should(Succeed())
+			time.Sleep(2 * time.Second)
+			pfCtx, cancel := context.WithCancel(context.Background())
+			pfCancel = cancel
+			pfRestoreCmd := exec.CommandContext(pfCtx, "kubectl", "port-forward",
+				"svc/server",
+				fmt.Sprintf("%s:80", serverPortForwardPort),
+				"-n", moduleNamespace,
+			)
+			_ = pfRestoreCmd.Start()
+			time.Sleep(3 * time.Second)
 
-			By("getting the metrics by checking curl-metrics logs")
-			metricsOutput := getMetricsOutput()
-			Expect(metricsOutput).To(ContainSubstring(
-				"controller_runtime_reconcile_total",
-			))
+			By("cleaning up auth test RBAC")
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "rolebinding", authTestRB, "-n", moduleNamespace, "--ignore-not-found"))
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "role", authTestRole, "-n", moduleNamespace, "--ignore-not-found"))
+			_, _ = utils.Run(exec.Command("kubectl", "delete", "serviceaccount", authTestSA, "-n", moduleNamespace, "--ignore-not-found"))
 		})
 
-		// +kubebuilder:scaffold:e2e-webhooks-checks
+		By("disabling anonymous auth via Helm upgrade")
+		cmd := exec.Command("helm", "upgrade", helmReleaseName, chartPath,
+			"--namespace", moduleNamespace,
+			"--reuse-values",
+			"--set", "server.anonymousAuth=false",
+			"--set", "server.useBearerToken=true",
+			"--wait",
+			"--timeout", "2m",
+		)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to disable anonymous auth")
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput := getMetricsOutput()
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		By("restarting port-forward after server pod restart")
+		if pfCancel != nil {
+			pfCancel()
+		}
+		time.Sleep(2 * time.Second)
+		pfCtx, pfCancelNew := context.WithCancel(context.Background())
+		pfCancel = pfCancelNew
+		pfCmd := exec.CommandContext(pfCtx, "kubectl", "port-forward",
+			"svc/server",
+			fmt.Sprintf("%s:80", serverPortForwardPort),
+			"-n", moduleNamespace,
+		)
+		Expect(pfCmd.Start()).To(Succeed(), "Failed to restart port-forward")
+		time.Sleep(3 * time.Second)
+
+		By("verifying unauthenticated request returns 401")
+		unauthResp, err := http.Get(fmt.Sprintf( //nolint:noctx
+			"http://localhost:%s/kerrareg/modules/v1/%s/%s/%s/versions",
+			serverPortForwardPort, moduleNamespace, moduleCRName, moduleProvider))
+		Expect(err).NotTo(HaveOccurred())
+		_ = unauthResp.Body.Close()
+		Expect(unauthResp.StatusCode).To(Equal(http.StatusUnauthorized))
+
+		By("creating a read-only ServiceAccount and RBAC for the auth test")
+		_, _ = utils.Run(exec.Command("kubectl", "create", "serviceaccount", authTestSA, "-n", moduleNamespace))
+		_, _ = utils.Run(exec.Command("kubectl", "create", "role", authTestRole,
+			"-n", moduleNamespace,
+			"--resource=modules.kerrareg.io,versions.kerrareg.io",
+			"--verb=get,list,watch",
+		))
+		_, _ = utils.Run(exec.Command("kubectl", "create", "rolebinding", authTestRB,
+			"-n", moduleNamespace,
+			fmt.Sprintf("--role=%s", authTestRole),
+			fmt.Sprintf("--serviceaccount=%s:%s", moduleNamespace, authTestSA),
+		))
+
+		By("generating a short-lived ServiceAccount token")
+		tokenOutput, err := utils.Run(exec.Command("kubectl", "create", "token", authTestSA,
+			"-n", moduleNamespace,
+			"--duration=1h",
+		))
+		Expect(err).NotTo(HaveOccurred())
+		token := strings.TrimSpace(tokenOutput)
+		Expect(token).NotTo(BeEmpty())
+
+		By("running tofu init with bearer token authentication")
+		tmpDir := GinkgoT().TempDir()
+		mainTF := fmt.Sprintf(`module "key_pair" {
+  source  = "%s/%s/%s/%s"
+  version = "%s"
+}
+`, registryHost, moduleNamespace, moduleCRName, moduleProvider, moduleVersion)
+		Expect(os.WriteFile(filepath.Join(tmpDir, "main.tf"), []byte(mainTF), 0600)).To(Succeed())
+
+		tofuRC := fmt.Sprintf(`host "%s" {
+  services = {
+    "modules.v1" = "http://%s/kerrareg/modules/v1/"
+  }
+}
+credentials "%s" {
+  token = "%s"
+}
+`, registryHost, registryHost, registryHost, token)
+		tofuRCPath := filepath.Join(tmpDir, ".tofurc")
+		Expect(os.WriteFile(tofuRCPath, []byte(tofuRC), 0600)).To(Succeed())
+
+		iniCmd := exec.Command("tofu", "init", "-no-color")
+		iniCmd.Dir = tmpDir
+		iniCmd.Env = append(os.Environ(),
+			fmt.Sprintf("TF_CLI_CONFIG_FILE=%s", tofuRCPath),
+		)
+		output, initErr := iniCmd.CombinedOutput()
+		Expect(initErr).NotTo(HaveOccurred(),
+			"tofu init with auth failed; output:\n%s", string(output))
+		Expect(string(output)).To(ContainSubstring("successfully initialized"))
 	})
 })
 
-// serviceAccountToken returns a token for the specified service account in the given namespace.
-// It uses the Kubernetes TokenRequest API to generate a token by directly sending a request
-// and parsing the resulting token from the API response.
-func serviceAccountToken() (string, error) {
-	const tokenRequestRawString = `{
-		"apiVersion": "authentication.k8s.io/v1",
-		"kind": "TokenRequest"
-	}`
-
-	// Temporary file to store the token request
-	secretName := fmt.Sprintf("%s-token-request", serviceAccountName)
-	tokenRequestFile := filepath.Join("/tmp", secretName)
-	err := os.WriteFile(tokenRequestFile, []byte(tokenRequestRawString), os.FileMode(0o644))
-	if err != nil {
-		return "", err
-	}
-
-	var out string
-	verifyTokenCreation := func(g Gomega) {
-		// Execute kubectl command to create the token
-		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
-			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
-			namespace,
-			serviceAccountName,
-		), "-f", tokenRequestFile)
-
-		output, err := cmd.CombinedOutput()
-		g.Expect(err).NotTo(HaveOccurred())
-
-		// Parse the JSON output to extract the token
-		var token tokenRequest
-		err = json.Unmarshal(output, &token)
-		g.Expect(err).NotTo(HaveOccurred())
-
-		out = token.Status.Token
-	}
-	Eventually(verifyTokenCreation).Should(Succeed())
-
-	return out, err
+// httpGetBody performs an HTTP GET to the given URL and returns the response body as a string.
+// The test fails immediately if the request returns a non-2xx status.
+func httpGetBody(url string) string {
+	resp, err := http.Get(url) //nolint:noctx
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "HTTP GET failed for %s", url)
+	defer resp.Body.Close()
+	ExpectWithOffset(1, resp.StatusCode).To(BeNumerically(">=", 200),
+		"unexpected status %d for %s", resp.StatusCode, url)
+	ExpectWithOffset(1, resp.StatusCode).To(BeNumerically("<", 300),
+		"unexpected status %d for %s", resp.StatusCode, url)
+	body, err := io.ReadAll(resp.Body)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	return string(body)
 }
 
-// getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
-func getMetricsOutput() string {
-	By("getting the curl-metrics logs")
-	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-	metricsOutput, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-	Expect(metricsOutput).To(ContainSubstring("< HTTP/1.1 200 OK"))
-	return metricsOutput
-}
-
-// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
-// containing only the token field that we need to extract.
-type tokenRequest struct {
-	Status struct {
-		Token string `json:"token"`
-	} `json:"status"`
+// httpGetRaw performs an HTTP GET and returns the raw response (without reading the body).
+// The caller is responsible for closing resp.Body.
+func httpGetRaw(url string) *http.Response {
+	resp, err := http.Get(url) //nolint:noctx
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "HTTP GET failed for %s", url)
+	return resp
 }

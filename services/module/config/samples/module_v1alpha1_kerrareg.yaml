@@ -1,9 +1,0 @@
-apiVersion: kerrareg.io/v1alpha1
-kind: Module
-metadata:
-  labels:
-    app.kubernetes.io/name: kerrareg
-    app.kubernetes.io/managed-by: kustomize
-  name: kerrareg-sample
-spec:
-  # TODO(user): Add fields here

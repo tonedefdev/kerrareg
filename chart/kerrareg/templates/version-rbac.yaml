@@ -50,6 +50,20 @@ rules:
   - patch
   - update
 - apiGroups:
+  - kerrareg.io
+  resources:
+  - providers
+  verbs:
+  - get
+- apiGroups:
+  - kerrareg.io
+  resources:
+  - providers/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - ""
   resources:
   - secrets
