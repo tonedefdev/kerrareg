@@ -26,7 +26,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/tonedefdev/kerrareg/services/depot/test/utils"
+	utils "github.com/tonedefdev/kerrareg/pkg/testutils"
 )
 
 var _ = Describe("Depot", Ordered, func() {

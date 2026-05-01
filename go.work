@@ -10,4 +10,5 @@ use (
 	./pkg/storage
 	./pkg/github
 	./pkg/utils
+	./pkg/testutils
 )

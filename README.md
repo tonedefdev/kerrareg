@@ -5,7 +5,7 @@
 [![Helm](https://img.shields.io/badge/Helm_Chart-0.1.0-0F1689?logo=helm&logoColor=white)](https://github.com/tonedefdev/kerrareg/tree/main/chart/kerrareg)
 
 <p align="center">
-  <img src="img/kerrareg.png" width="400" />
+  <img src="img/kerrareg.svg" width="400" />
 </p>
 
 A Kubernetes-native, self-hosted OpenTofu/Terraform module registry that implements the [Module Registry Protocol](https://opentofu.org/docs/internals/module-registry-protocol/). Kerrareg gives organizations complete control over module distribution, versioning, and storage — without relying on the public registry.
