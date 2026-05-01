@@ -1,6 +1,6 @@
 site_name: Kerrareg
 site_description: Self-hosted OpenTofu/Terraform Module and Provider Registry for Kubernetes
-# site_url: https://<your-org>.github.io/kerrareg/docs/
+site_url: https://tonedefdevgithub.io/kerrareg/docs/
 repo_url: https://github.com/tonedefdev/kerrareg
 repo_name: tonedefdev/kerrareg
 edit_uri: edit/main/docs/
