@@ -11,5 +11,5 @@ RUN npm run build
 EXPOSE 8081
 
 ENV PORT=8081
-ENV KERRAREG_K8S_AUTH_MODE=incluster
+ENV OPENDEPOT_K8S_AUTH_MODE=incluster
 CMD ["npm", "run", "start"]

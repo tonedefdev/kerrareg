@@ -6,7 +6,7 @@ import { buildOpenDepotGraph } from "./k8s";
 
 const app = express();
 const port = Number(process.env.PORT || 8082);
-const defaultNamespace = process.env.KERRAREG_NAMESPACE || "opendepot-system";
+const defaultNamespace = process.env.OPENDEPOT_NAMESPACE || "opendepot-system";
 
 app.use(cors());
 app.use(express.json());

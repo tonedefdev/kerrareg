@@ -2,22 +2,22 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-domain: kerrareg.io
+domain: opendepot.defdev.io
 layout:
 - go.kubebuilder.io/v4
 plugins:
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
-projectName: kerrareg
-repo: kerrareg
+projectName: opendepot
+repo: opendepot
 resources:
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: kerrareg.io
-  group: kerrareg.io
+  domain: opendepot.defdev.io
+  group: opendepot.defdev.io
   kind: Module
-  path: kerrareg/services/module/api/v1alpha1
+  path: opendepot/services/module/api/v1alpha1
   version: v1alpha1
 version: "3"

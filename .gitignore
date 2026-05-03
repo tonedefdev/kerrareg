@@ -30,7 +30,7 @@ profile.cov
 
 api/*/bin/
 services/*/bin/
-chart/kerrareg/tls-secret.yaml
+chart/opendepot/tls-secret.yaml
 .DS_Store
 examples/internal-developer-portal/server/dist/
 examples/internal-developer-portal/server/node_modules/

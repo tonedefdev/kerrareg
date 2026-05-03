@@ -24,7 +24,7 @@ function hasInClusterContext(): boolean {
 
 function makeKubeConfig(): KubeConfig {
   const kc = new KubeConfig();
-  const mode = (process.env.KERRAREG_K8S_AUTH_MODE || "auto").toLowerCase();
+  const mode = (process.env.OPENDEPOT_K8S_AUTH_MODE || "auto").toLowerCase();
 
   if (mode === "incluster") {
     if (!hasInClusterContext()) {

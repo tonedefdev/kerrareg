@@ -43,8 +43,8 @@ npm run dev
 
 ## Environment Variables
 
-- `KERRAREG_NAMESPACE`: Namespace to query (default `opendepot-system`)
-- `KERRAREG_K8S_AUTH_MODE`: `auto`, `kubeconfig`, or `incluster` (default `auto`)
+- `OPENDEPOT_NAMESPACE`: Namespace to query (default `opendepot-system`)
+- `OPENDEPOT_K8S_AUTH_MODE`: `auto`, `kubeconfig`, or `incluster` (default `auto`)
 - `KUBECONFIG`: Optional path when running in local kubeconfig mode
 - `PORT`: API server port (default `8082`)
 - `VITE_API_BASE_URL`: Optional frontend API base URL (example: `http://localhost:8082`)

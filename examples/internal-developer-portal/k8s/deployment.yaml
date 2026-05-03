@@ -19,9 +19,9 @@ spec:
           image: ghcr.io/tonedefdev/opendepot/portal:dev
           imagePullPolicy: IfNotPresent
           env:
-            - name: KERRAREG_NAMESPACE
+            - name: OPENDEPOT_NAMESPACE
               value: opendepot-system
-            - name: KERRAREG_K8S_AUTH_MODE
+            - name: OPENDEPOT_K8S_AUTH_MODE
               value: incluster
             - name: PORT
               value: "8081"

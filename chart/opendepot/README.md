@@ -178,10 +178,10 @@ The secret must contain the following keys:
 
 | Key | Description |
 |-----|-------------|
-| `KERRAREG_PROVIDER_GPG_KEY_ID` | GPG key ID |
-| `KERRAREG_PROVIDER_GPG_ASCII_ARMOR` | ASCII-armored public key |
-| `KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64` | Base64-encoded private key |
-| `KERRAREG_PROVIDER_GPG_SOURCE_URL` | (Optional) Key source URL |
+| `OPENDEPOT_PROVIDER_GPG_KEY_ID` | GPG key ID |
+| `OPENDEPOT_PROVIDER_GPG_ASCII_ARMOR` | ASCII-armored public key |
+| `OPENDEPOT_PROVIDER_GPG_PRIVATE_KEY_BASE64` | Base64-encoded private key |
+| `OPENDEPOT_PROVIDER_GPG_SOURCE_URL` | (Optional) Key source URL |
 
 #### Server — Pod Disruption Budget
 

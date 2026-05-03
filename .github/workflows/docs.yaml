@@ -34,10 +34,5 @@ jobs:
       - name: Install MkDocs dependencies
         run: pip install -r requirements.txt
 
-      - name: Prepare docs
-        run: |
-          cp CONTRIBUTING.md docs/contributing.md
-          cp chart/opendepot/README.md docs/helm-chart.md
-
       - name: Deploy to GitHub Pages
         run: mkdocs gh-deploy --force

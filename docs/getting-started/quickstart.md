@@ -254,9 +254,9 @@ PRIVATE_B64=$(gpg --armor --export-secret-keys "$KEY_ID" | base64 | tr -d '\n')
 
 kubectl create secret generic opendepot-provider-gpg \
   --namespace opendepot-system \
-  --from-literal=KERRAREG_PROVIDER_GPG_KEY_ID="$KEY_ID" \
-  --from-literal=KERRAREG_PROVIDER_GPG_ASCII_ARMOR="$ASCII_ARMOR" \
-  --from-literal=KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64="$PRIVATE_B64"
+  --from-literal=OPENDEPOT_PROVIDER_GPG_KEY_ID="$KEY_ID" \
+  --from-literal=OPENDEPOT_PROVIDER_GPG_ASCII_ARMOR="$ASCII_ARMOR" \
+  --from-literal=OPENDEPOT_PROVIDER_GPG_PRIVATE_KEY_BASE64="$PRIVATE_B64"
 ```
 
 **Step 8b: Redeploy OpenDepot with the provider controller and GPG secret**
