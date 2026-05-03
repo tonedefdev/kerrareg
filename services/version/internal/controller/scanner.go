@@ -568,7 +568,7 @@ func (r *VersionReconciler) scanModuleArchive(ctx context.Context, archiveBytes 
 	// --scanners misconfig is required: trivy fs defaults to vuln,secret only.
 	// Config-class (IaC) rules are bundled in the Trivy binary and do not need
 	// the vulnerability DB, so this works correctly with --offline-scan.
-	args := []string{"fs", "--format", "json", "--scanners", "misconfig"}
+	args := []string{"fs", "--format", "json", "--scanners", "misconfig", tmpDir}
 
 	// Serialise Trivy invocations: each process loads the full ~2 GiB DB.
 	select {

@@ -256,15 +256,15 @@ spec:
 					"expected Version CR to reach synced=true")
 			}, 5*time.Minute, 10*time.Second).Should(Succeed())
 
-			By("asserting that status.sourceScan.findings contains at least one AVD- rule ID")
+			By("asserting that status.sourceScan.findings contains at least one security finding")
 			cmd = exec.Command("kubectl", "get", "version", scanVersionName,
 				"-n", namespace,
 				"-o", "jsonpath={.status.sourceScan.findings}",
 			)
 			findings, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(findings).To(ContainSubstring("AVD-"),
-				"expected sourceScan.findings to contain at least one AVD- rule ID")
+			Expect(findings).To(ContainSubstring("vulnerabilityID"),
+				"expected sourceScan.findings to contain at least one security finding")
 		})
 	})
 })

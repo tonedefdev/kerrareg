@@ -133,12 +133,18 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	if version.Spec.ModuleConfigRef != nil && version.Spec.ProviderConfigRef != nil {
+		r.Log.V(5).Info("dual-config guard: both moduleConfigRef and providerConfigRef are set; writing terminal status",
+			"version", version.Name,
+		)
 		version.Status.Synced = false
 		version.Status.SyncStatus = "Only one of 'ModuleConfigRef' or 'ProviderConfigRef' can be provided: both are defined"
 		if err := r.Status().Update(ctx, version); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, fmt.Errorf("invalid version config: both moduleConfigRef and providerConfigRef are defined")
+		// This is a permanent user configuration error that cannot be resolved by
+		// requeuing. Return without an error so controller-runtime does not log a
+		// "Reconciler error" and does not schedule unnecessary backoff retries.
+		return ctrl.Result{}, nil
 	}
 
 	var fileBytes []byte
@@ -147,6 +153,7 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	switch version.Spec.Type {
 	case opendepotv1alpha1.OpenDepotModule:
+		r.Log.V(5).Info("fetching module archive", "version", version.Name, "versionStr", version.Spec.Version)
 		moduleBytes, checksum, err := r.fetchModuleArchive(ctx, version)
 		if err != nil {
 			version.Status.SyncStatus = fmt.Sprintf("Failed to retrieve module archive: %v", err)
@@ -154,6 +161,7 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, err
 		}
 
+		r.Log.V(5).Info("module archive fetched", "version", version.Name, "bytes", len(moduleBytes))
 		fileBytes = moduleBytes
 		archiveChecksum = checksum
 
@@ -170,6 +178,7 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, statusMsg
 		}
 	case opendepotv1alpha1.OpenDepotProvider:
+		r.Log.V(5).Info("checking provider fast-path", "version", version.Name, "synced", version.Status.Synced, "checksumSet", version.Status.Checksum != nil)
 		// Fast path: if the Version has already been synced and the artifact exists in
 		// storage with a matching checksum, there is nothing to download or upload.
 		// Skipping the download is critical — /tmp is tmpfs (RAM-backed) in Linux
@@ -186,6 +195,7 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					earlySoi.FileExists &&
 					earlySoi.ObjectChecksum != nil &&
 					*earlySoi.ObjectChecksum == *version.Status.Checksum {
+					r.Log.V(5).Info("provider fast-path hit: artifact exists with matching checksum; skipping download", "version", version.Name)
 					return reconcile.Result{}, nil
 				}
 			}
@@ -193,18 +203,26 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 		// Serialize provider downloads: each is ~700 MB and concurrent downloads
 		// exhaust memory. The semaphore ensures only one download runs at a time.
+		r.Log.V(5).Info("waiting for download semaphore", "version", version.Name)
 		select {
 		case r.downloadSem <- struct{}{}:
 		case <-ctx.Done():
 			return ctrl.Result{}, ctx.Err()
 		}
+
+		r.Log.V(5).Info("download semaphore acquired; fetching provider archive", "version", version.Name)
 		tmpPath, cleanupArchive, checksum, fileName, err := r.fetchProviderArchive(ctx, version)
+
 		<-r.downloadSem
+		r.Log.V(5).Info("download semaphore released", "version", version.Name)
+
 		if err != nil {
 			version.Status.SyncStatus = fmt.Sprintf("Failed to retrieve provider archive from HashiCorp releases API: %v", err)
 			_ = r.Status().Update(ctx, version)
 			return ctrl.Result{}, err
 		}
+
+		r.Log.V(5).Info("provider archive fetched", "version", version.Name, "tmpPath", tmpPath)
 		defer cleanupArchive()
 
 		if version.Spec.FileName == nil {
@@ -214,6 +232,7 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				_ = r.Status().Update(ctx, version)
 				return ctrl.Result{}, err
 			}
+
 			version.Spec.FileName = uuidFileName
 		}
 
@@ -223,7 +242,16 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	filePath, err := getVersionFilePath(version)
 	if err != nil {
-		return ctrl.Result{}, err
+		// FileName is nil — the spec update that persists it from a previous
+		// reconcile has not propagated yet (e.g. the update was lost to a
+		// conflict). Write a status message and requeue; do not return an error
+		// or controller-runtime will log "Reconciler error" and backoff-requeue
+		// indefinitely for what is a transient state.
+		r.Log.V(5).Info("cannot compute file path; requeueing", "version", version.Name, "reason", err.Error())
+		version.Status.Synced = false
+		version.Status.SyncStatus = fmt.Sprintf("Waiting for file path to be available: %v", err)
+		_ = r.Status().Update(ctx, version)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	// For providers the archive is on disk (providerTmpPath); open it as a ReadSeeker so
@@ -236,6 +264,7 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			_ = r.Status().Update(ctx, version)
 			return ctrl.Result{}, openErr
 		}
+
 		defer pf.Close()
 		providerFile = pf
 	}
@@ -244,17 +273,23 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	hasArtifact := len(fileBytes) > 0 || providerFile != nil
 
 	soi := &types.StorageObjectInput{
-		FileBytes:  fileBytes,
-		FileReader: providerFile,
-		FilePath:   filePath,
-		Version:    version,
+		FileBytes: fileBytes,
+		FilePath:  filePath,
+		Version:   version,
+	}
+
+	if providerFile != nil {
+		soi.FileReader = providerFile
 	}
 
 	if version.Status.Checksum != nil {
+		r.Log.V(5).Info("status checksum set; performing storage get to verify artifact", "version", version.Name)
 		soi.Method = types.Get
 		if err = r.InitStorageFactory(ctx, soi); err != nil {
 			return ctrl.Result{}, err
 		}
+
+		r.Log.V(5).Info("storage get complete", "version", version.Name, "fileExists", soi.FileExists)
 	} else {
 		if !hasArtifact {
 			version.Status.Synced = false
@@ -263,10 +298,12 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
+		r.Log.V(5).Info("no status checksum; uploading artifact", "version", version.Name)
 		soi.Method = types.Put
 		if err = r.InitStorageFactory(ctx, soi); err != nil {
 			return ctrl.Result{}, err
 		}
+		r.Log.V(5).Info("initial storage put complete", "version", version.Name)
 	}
 
 	if !soi.FileExists || (soi.ObjectChecksum != nil && version.Status.Checksum != nil && *soi.ObjectChecksum != *version.Status.Checksum) {
@@ -284,10 +321,12 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 		}
 
+		r.Log.V(5).Info("artifact missing or checksum mismatch; re-uploading", "version", version.Name, "fileExists", soi.FileExists)
 		soi.Method = types.Put
 		if err = r.InitStorageFactory(ctx, soi); err != nil {
 			return ctrl.Result{}, err
 		}
+		r.Log.V(5).Info("re-upload storage put complete", "version", version.Name)
 	}
 
 	if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -319,8 +358,12 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// temp file on disk instead.
 	var binaryScan *opendepotv1alpha1.ProviderBinaryScan
 	if r.ScanningEnabled && version.Spec.Type == opendepotv1alpha1.OpenDepotProvider && providerTmpPath != "" {
+		r.Log.V(5).Info("waiting for scan semaphore (provider binary scan)", "version", version.Name)
+
 		var scanErr error
 		binaryScan, scanErr = r.runProviderScan(ctx, version, providerTmpPath, r.TrivyCacheDir, r.ScanOffline, r.BlockOnCritical, r.BlockOnHigh)
+		r.Log.V(5).Info("provider binary scan complete", "version", version.Name, "findingsPresent", binaryScan != nil)
+
 		if scanErr != nil {
 			version.Status.Synced = false
 			version.Status.SyncStatus = fmt.Sprintf("Scan policy violation: %v", scanErr)
@@ -333,8 +376,12 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// The scan result is returned here and written atomically in the final status update below.
 	var moduleScan *opendepotv1alpha1.ModuleSourceScan
 	if r.ScanningEnabled && r.ScanModules && version.Spec.Type == opendepotv1alpha1.OpenDepotModule && len(fileBytes) > 0 {
+		r.Log.V(5).Info("waiting for scan semaphore (module source scan)", "version", version.Name)
+
 		var scanErr error
 		moduleScan, scanErr = r.runModuleScan(ctx, version, fileBytes, r.TrivyCacheDir, r.ScanOffline, r.BlockOnCritical, r.BlockOnHigh)
+		r.Log.V(5).Info("module source scan complete", "version", version.Name, "findingsPresent", moduleScan != nil)
+
 		if scanErr != nil {
 			version.Status.Synced = false
 			version.Status.SyncStatus = fmt.Sprintf("Scan policy violation: %v", scanErr)
@@ -379,13 +426,26 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 // reconcileDeletion removes the stored artifact and finalizer when a Version is being deleted.
 func (r *VersionReconciler) reconcileDeletion(ctx context.Context, version *opendepotv1alpha1.Version) (ctrl.Result, error) {
+	r.Log.V(5).Info("reconciling deletion", "version", version.Name)
 	if !controllerutil.ContainsFinalizer(version, opendepotv1alpha1.OpenDepotFinalizer) {
+		r.Log.V(5).Info("no finalizer present; skipping deletion reconciliation", "version", version.Name)
 		return ctrl.Result{}, nil
 	}
 
 	filePath, err := getVersionFilePath(version)
 	if err != nil {
-		return ctrl.Result{}, err
+		// If the file path cannot be resolved (e.g. FileName was never persisted
+		// because the Version was deleted before its first successful sync), there
+		// is no stored artifact to remove. Skip storage deletion and proceed
+		// directly to finalizer removal so the object is not stuck terminating.
+		r.Log.V(5).Info("skipping storage deletion: cannot resolve file path; removing finalizer directly",
+			"version", version.Name, "reason", err.Error(),
+		)
+		controllerutil.RemoveFinalizer(version, opendepotv1alpha1.OpenDepotFinalizer)
+		if err := r.Update(ctx, version); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	soi := &types.StorageObjectInput{
@@ -393,10 +453,13 @@ func (r *VersionReconciler) reconcileDeletion(ctx context.Context, version *open
 		FilePath: filePath,
 		Version:  version,
 	}
+
+	r.Log.V(5).Info("deleting stored artifact", "version", version.Name, "filePath", filePath)
 	if err := r.InitStorageFactory(ctx, soi); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	r.Log.V(5).Info("artifact deleted; removing finalizer", "version", version.Name)
 	controllerutil.RemoveFinalizer(version, opendepotv1alpha1.OpenDepotFinalizer)
 	if err := r.Update(ctx, version); err != nil {
 		return ctrl.Result{}, err
@@ -444,12 +507,32 @@ func (r *VersionReconciler) prepareModuleVersion(ctx context.Context, req ctrl.R
 	}
 
 	if module.Status.ModuleVersionRefs == nil {
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		// Module CR exists but the module controller has not populated any refs yet
+		// (e.g. the module controller is not deployed in this environment). Fall back
+		// to inline mode so the version controller can operate independently.
+		if version.Spec.FileName == nil {
+			uuidFileName, err := generateModuleFileName(version.Spec.ModuleConfigRef.FileFormat)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to generate UUID filename for module archive: %w", err)
+			}
+			version.Spec.FileName = uuidFileName
+		}
+		return ctrl.Result{}, nil
 	}
 
 	moduleRef, exists := module.Status.ModuleVersionRefs[version.Spec.Version]
 	if !exists || moduleRef == nil || moduleRef.FileName == nil {
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		// The Module CR exists but has no ref for this specific version — the module
+		// controller may not be deployed or has not reconciled this version yet. Fall
+		// back to inline mode so this Version can be synced independently.
+		if version.Spec.FileName == nil {
+			uuidFileName, err := generateModuleFileName(version.Spec.ModuleConfigRef.FileFormat)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to generate UUID filename for module archive: %w", err)
+			}
+			version.Spec.FileName = uuidFileName
+		}
+		return ctrl.Result{}, nil
 	}
 
 	version.Spec.ModuleConfigRef = &module.Spec.ModuleConfig
@@ -544,6 +627,7 @@ func generateProviderFileName(originalFileName string) (*string, error) {
 // full provider zip (~700 MB) in the Go heap. The caller must invoke the returned
 // cleanup function (typically via defer) to remove the temp file.
 func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *opendepotv1alpha1.Version) (archivePath string, cleanup func(), checksum *string, fileName *string, err error) {
+	r.Log.V(5).Info("looking up provider download URL", "version", version.Name, "versionStr", version.Spec.Version, "os", version.Spec.OperatingSystem, "arch", version.Spec.Architecture)
 	if version.Spec.ProviderConfigRef == nil || version.Spec.ProviderConfigRef.Name == nil {
 		return "", func() {}, nil, nil, fmt.Errorf("providerConfigRef.name is required")
 	}
@@ -570,6 +654,7 @@ func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *o
 	if err != nil {
 		return "", func() {}, nil, nil, err
 	}
+	r.Log.V(5).Info("provider download URL resolved; streaming archive", "version", version.Name, "url", download.DownloadURL, "filename", download.Filename)
 
 	tmpPath, checksumHex, cleanupFn, err := httpStreamToFile(ctx, download.DownloadURL)
 	if err != nil {
@@ -583,6 +668,7 @@ func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *o
 			return "", func() {}, nil, nil, fmt.Errorf("checksum mismatch for provider archive %s: registry expected %s, got %s",
 				download.Filename, download.Shasum, checksumHex)
 		}
+		r.Log.V(5).Info("provider archive checksum verified", "version", version.Name, "sha256", checksumHex)
 	}
 
 	// Re-encode the hex SHA-256 as base64 for storage (matches the existing format).
