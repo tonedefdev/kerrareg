@@ -51,6 +51,12 @@ OpenDepot delegates auth entirely to Kubernetes — the platform you're likely a
 
     Checksums are written to Kubernetes status subresources (protected by RBAC) and verified on every reconciliation — not just at upload time.
 
+- :material-magnify-scan: &nbsp;__Built-In Vulnerability Scanning__
+
+    ---
+
+    The Version controller runs [Trivy](https://trivy.dev/) automatically on every provider binary, provider source (`go.mod`), and module archive. Findings are stored on the Kubernetes resource and can optionally block promotion of critical or high severity artifacts.
+
 </div>
 
 ## How OpenDepot Compares
@@ -65,6 +71,7 @@ OpenDepot delegates auth entirely to Kubernetes — the platform you're likely a
 | Version discovery | Automatic via Depot (GitHub + HashiCorp Releases APIs) | Manual upload or API push | Manual upload or API push |
 | Immutability enforcement | Checksum validated every reconciliation | At upload time only | At upload time only |
 | Air-gapped support | Yes (filesystem backend + PVC) | Yes (filesystem) | Limited |
+| Vulnerability scanning | Built-in (Trivy — provider binary, source, and module IaC) | No | No |
 
 !!! tip
     If you're already running Kubernetes, OpenDepot gives you a registry where security, auth, and operations come free — no extra infrastructure, no extra accounts, no extra attack surface.

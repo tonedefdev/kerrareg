@@ -55,6 +55,8 @@ Follow these patterns exactly as they exist in the codebase:
 - New controller flags or environment variables must be reflected in the relevant `templates/<service>-deployment.yaml` and exposed as values in `values.yaml`
 - New RBAC rules added via kubebuilder markers must be mirrored in `templates/<service>-rbac.yaml`
 - Bump `version` in `chart/opendepot/Chart.yaml` when any chart file changes
+- Bump `appVersion` in `chart/opendepot/Chart.yaml` when any service image tag changes (e.g., `version` field in `values.yaml`)
+- Bump service image tag in `values.yaml` when any service code changes (e.g., `version` field under each service)
 
 ## Acceptance Criteria
 
@@ -69,7 +71,7 @@ Follow these patterns exactly as they exist in the codebase:
 ## Workflow
 
 ```
-1. Read plan from /memories/session/plan.md (or build context manually)
+1. Read plan from .session-memory/plan.md with memory tool — this is the ground truth for what to implement.
 2. Create todo list of all implementation steps
 3. Implement CRD/type changes first (api/v1alpha1/)
 4. Implement controller logic changes
