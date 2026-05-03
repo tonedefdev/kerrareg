@@ -347,6 +347,111 @@ credentials "%s" {
 	})
 })
 
+var _ = Describe("Module Scanning", Ordered, func() {
+	const (
+		scanNamespace      = "opendepot-system"
+		scanModuleCRName   = "terraform-aws-key-pair"
+		scanModuleVersion  = "2.0.0"
+		scanVersionCRName  = "terraform-aws-key-pair-2.0.0"
+		scanModuleProvider = "aws"
+		scanStoragePath    = "/data/modules"
+	)
+
+	BeforeAll(func() {
+		By("upgrading Helm release to enable scanning with scanModules=true")
+		chartPath, err := utils.GetChartPath()
+		Expect(err).NotTo(HaveOccurred())
+
+		cmd := exec.Command("helm", "upgrade", helmReleaseName, chartPath,
+			"--namespace", scanNamespace,
+			"--reuse-values",
+			"--set", "scanning.enabled=true",
+			"--set", "scanning.scanModules=true",
+			"--set", "scanning.offline=false",
+			// Kind's default storage class only supports ReadWriteOnce.
+			"--set", "scanning.cache.accessMode=ReadWriteOnce",
+			// Extra memory headroom for the version controller running Trivy.
+			"--set", "version.resources.limits.memory=1Gi",
+			"--wait",
+			"--timeout", "3m",
+		)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to upgrade Helm release with module scanning enabled")
+
+		By("applying the test Module CR")
+		moduleYAML := fmt.Sprintf(`
+apiVersion: opendepot.defdev.io/v1alpha1
+kind: Module
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  moduleConfig:
+    fileFormat: zip
+    githubClientConfig:
+      useAuthenticatedClient: false
+    provider: %s
+    repoOwner: terraform-aws-modules
+    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-key-pair
+    storageConfig:
+      fileSystem:
+        directoryPath: %s
+  versions:
+    - version: "%s"
+`, scanModuleCRName, scanNamespace, scanModuleProvider, scanStoragePath, scanModuleVersion)
+
+		moduleFile := filepath.Join(GinkgoT().TempDir(), "scan-module.yaml")
+		Expect(os.WriteFile(moduleFile, []byte(moduleYAML), 0600)).To(Succeed())
+		cmd = exec.Command("kubectl", "apply", "-f", moduleFile)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to apply scan Module CR")
+	})
+
+	AfterAll(func() {
+		cmd := exec.Command("kubectl", "delete", "module", scanModuleCRName,
+			"-n", scanNamespace, "--ignore-not-found",
+		)
+		_, _ = utils.Run(cmd)
+
+		By("disabling scanning to restore baseline state for other test blocks")
+		chartPath, err := utils.GetChartPath()
+		Expect(err).NotTo(HaveOccurred())
+		cmd = exec.Command("helm", "upgrade", helmReleaseName, chartPath,
+			"--namespace", scanNamespace,
+			"--reuse-values",
+			"--set", "scanning.enabled=false",
+			"--wait",
+			"--timeout", "3m",
+		)
+		_, _ = utils.Run(cmd)
+	})
+
+	It("should sync the module Version CR", func() {
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "version", scanVersionCRName,
+				"-n", scanNamespace,
+				"-o", "jsonpath={.status.synced}",
+			)
+			output, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(output).To(Equal("true"))
+		}, 5*time.Minute, 10*time.Second).Should(Succeed())
+	})
+
+	It("should populate sourceScan on the Version CR", func() {
+		// Trivy downloads its vulnerability DB on first run (~200 MB); allow generous time.
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "version", scanVersionCRName,
+				"-n", scanNamespace,
+				"-o", "jsonpath={.status.sourceScan.scannedAt}",
+			)
+			output, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(output).NotTo(BeEmpty(), "sourceScan.scannedAt should be set after scan completes")
+		}, 10*time.Minute, 15*time.Second).Should(Succeed())
+	})
+})
+
 // httpGetBody performs an HTTP GET to the given URL and returns the response body as a string.
 // The test fails immediately if the request returns a non-2xx status.
 func httpGetBody(url string) string {

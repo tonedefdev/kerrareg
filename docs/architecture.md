@@ -30,16 +30,20 @@ The most critical component. It performs the actual work of fetching module and 
 3. Generates a UUID7 filename for the archive (via `spec.fileName`, set by the Module controller on creation)
 4. Computes a base64-encoded SHA256 checksum
 5. Uploads the archive to the configured storage backend
-6. Updates the `Version` resource status with the checksum and sync state
+6. When scanning is enabled, extracts the archive to a temporary directory and runs an IaC scan (`trivy fs`) for HCL misconfigurations, storing findings in `Version.status.sourceScan`
+7. If `blockOnCritical` or `blockOnHigh` is configured, halts reconciliation for any version with findings at or above the threshold
+8. Updates the `Version` resource status with the checksum and sync state
 
 **Reconciliation loop (providers):**
 
-1. Queries the HashiCorp Releases API for the provider binary matching the target OS/architecture
+1. Queries the OpenTofu registry API (`registry.opentofu.org`) for the provider binary matching the target OS/architecture
 2. Downloads the provider archive (`.zip`)
 3. Generates a UUID7 filename and persists it to `spec.fileName` on the `Version` resource — subsequent reconciliations reuse the same filename, preventing duplicate uploads
 4. Computes a SHA256 checksum and generates a detached GPG signature over the `SHA256SUMS` file
 5. Uploads the archive to the configured storage backend
-6. Updates the `Version` resource status with the sync state
+6. When scanning is enabled, runs a binary scan (`trivy rootfs`) against the extracted provider binary and stores findings in `Version.status.binaryScan`; resolves the provider's source repository (explicit override → OpenTofu registry lookup → heuristic fallback) and runs a source scan (`trivy fs`), storing deduplicated results in `Provider.status.sourceScan`
+7. If `blockOnCritical` or `blockOnHigh` is configured, halts reconciliation for any version with findings at or above the threshold
+8. Updates the `Version` resource status with the sync state
 
 **Unpredictable filenames:** Both module and provider archives are stored with UUID7-generated filenames (e.g., `019726b3-1a2b-7c3d-8e4f-5a6b7c8d9e0f.zip`) instead of the original source filename. This prevents enumeration of storage objects by unauthenticated clients — the download URL cannot be guessed without first authenticating to the registry API and retrieving the `Version` resource.
 

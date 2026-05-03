@@ -43,6 +43,15 @@ spec:
       - name: version-controller
         image: "{{ .Values.version.image.repository }}:{{ default .Values.global.image.tag .Values.version.image.tag }}"
         imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+        {{- if .Values.scanning.enabled }}
+        args:
+        - --scanning-enabled=true
+        - --trivy-cache-dir={{ .Values.scanning.cacheMountPath }}
+        - --scan-offline={{ .Values.scanning.offline }}
+        - --scan-block-on-critical={{ .Values.scanning.blockOnCritical }}
+        - --scan-block-on-high={{ .Values.scanning.blockOnHigh }}
+        - --scan-modules={{ .Values.scanning.scanModules }}
+        {{- end }}
         {{- if .Values.rbac.scopeToNamespace }}
         env:
         - name: WATCH_NAMESPACE
@@ -50,18 +59,25 @@ spec:
         {{- end }}
         securityContext:
           allowPrivilegeEscalation: false
-          {{- if not .Values.storage.filesystem.enabled }}
+          {{- if not (or .Values.storage.filesystem.enabled .Values.scanning.enabled) }}
           readOnlyRootFilesystem: true
           {{- end }}
         resources:
           {{- toYaml .Values.version.resources | nindent 10 }}
-        {{- if .Values.storage.filesystem.enabled }}
+        {{- if or .Values.storage.filesystem.enabled .Values.scanning.enabled }}
         volumeMounts:
+        {{- if .Values.storage.filesystem.enabled }}
         - name: modules
           mountPath: {{ .Values.storage.filesystem.mountPath }}
         {{- end }}
-      {{- if .Values.storage.filesystem.enabled }}
+        {{- if .Values.scanning.enabled }}
+        - name: trivy-cache
+          mountPath: {{ .Values.scanning.cacheMountPath }}
+        {{- end }}
+        {{- end }}
+      {{- if or .Values.storage.filesystem.enabled .Values.scanning.enabled }}
       volumes:
+      {{- if .Values.storage.filesystem.enabled }}
       - name: modules
         {{- if .Values.storage.filesystem.hostPath }}
         hostPath:
@@ -71,6 +87,12 @@ spec:
         persistentVolumeClaim:
           claimName: opendepot-modules
         {{- end }}
+      {{- end }}
+      {{- if .Values.scanning.enabled }}
+      - name: trivy-cache
+        persistentVolumeClaim:
+          claimName: opendepot-trivy-cache
+      {{- end }}
       {{- end }}
       {{- with .Values.version.nodeSelector }}
       nodeSelector:

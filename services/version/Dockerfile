@@ -37,6 +37,8 @@ RUN cd services/version && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGET
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/version-controller .
+# Copy the Trivy binary for optional provider vulnerability scanning
+COPY --from=aquasec/trivy:0.70.0 /usr/local/bin/trivy /usr/local/bin/trivy
 USER 65532:65532
 
 ENTRYPOINT ["/version-controller"]

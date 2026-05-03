@@ -65,6 +65,7 @@ nav:
     - GitHub Authentication: configuration/github-auth.md
     - TLS: configuration/tls.md
     - GPG Signing: configuration/gpg.md
+    - Vulnerability Scanning: configuration/scanning.md
   - Guides:
     - guides/index.md
     - GitOps with Argo CD: guides/gitops.md

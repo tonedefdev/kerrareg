@@ -7,7 +7,7 @@ global:
   namespace: opendepot-system
   imagePullPolicy: IfNotPresent
   image:
-    tag: 0.2.0
+    tag: 0.2.2
 
 ## Version Service (Core - handles GitHub fetching and storage)
 version:
@@ -15,6 +15,7 @@ version:
   replicaCount: 1
   image:
     repository: ghcr.io/tonedefdev/opendepot/version-controller
+    tag: ""
   resources:
     requests:
       cpu: 100m
@@ -154,3 +155,37 @@ storage:
     storageClassName: ""
     # Size of the PersistentVolumeClaim (ignored when hostPath is set)
     size: 10Gi
+
+## Scanning configuration (Trivy-based provider vulnerability scanning)
+scanning:
+  # Enable Trivy security scanning for provider artifacts
+  enabled: false
+  # Mount path inside the version-controller container for the Trivy DB cache
+  cacheMountPath: /var/cache/trivy
+  # Pass --offline-scan to Trivy, preventing network calls during scans.
+  # Set to false only when you want Trivy to download the DB at scan time instead of
+  # relying on the pre-populated cache from the trivy-db-updater CronJob.
+  offline: true
+  # Block provider reconciliation when CRITICAL vulnerabilities are found
+  blockOnCritical: false
+  # Block provider reconciliation when HIGH vulnerabilities are found
+  blockOnHigh: false
+  # Enable Trivy IaC scanning for module version archives (requires scanning.enabled=true)
+  scanModules: false
+  # PersistentVolumeClaim for the shared Trivy vulnerability database
+  cache:
+    # StorageClass must support ReadWriteMany so that scanner and updater pods can share it.
+    # For single-node environments (e.g. Kind), ReadWriteOnce with the default storage class works.
+    storageClassName: ""
+    # Access mode for the Trivy cache PVC. ReadWriteMany is required when using the db-updater
+    # CronJob alongside the version controller on separate nodes. Use ReadWriteOnce for Kind.
+    accessMode: ReadWriteMany
+    # Size of the Trivy DB cache PVC
+    size: 1Gi
+  # CronJob that runs 'trivy image --download-db-only' daily to keep the offline DB current
+  dbUpdater:
+    # Cron schedule for the Trivy DB update job (default: 02:00 UTC daily)
+    schedule: "0 2 * * *"
+    image:
+      repository: aquasec/trivy
+      tag: "0.70.0"

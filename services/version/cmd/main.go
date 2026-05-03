@@ -80,6 +80,24 @@ func main() {
 		"The directory that contains the metrics server certificate.")
 	flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
+	var scanningEnabled bool
+	var trivyCacheDir string
+	var scanOffline bool
+	var scanBlockOnCritical bool
+	var scanBlockOnHigh bool
+	var scanModules bool
+	flag.BoolVar(&scanningEnabled, "scanning-enabled", false,
+		"Enable Trivy vulnerability scanning for provider artifacts.")
+	flag.StringVar(&trivyCacheDir, "trivy-cache-dir", "/var/cache/trivy",
+		"Path to the Trivy vulnerability database cache directory (must be pre-populated by the trivy-db-updater CronJob).")
+	flag.BoolVar(&scanOffline, "scan-offline", true,
+		"Pass --offline-scan to Trivy, preventing network calls during scans. Disable only when not using the offline DB cache.")
+	flag.BoolVar(&scanBlockOnCritical, "scan-block-on-critical", false,
+		"Block provider reconciliation when CRITICAL vulnerabilities are found by Trivy.")
+	flag.BoolVar(&scanBlockOnHigh, "scan-block-on-high", false,
+		"Block provider reconciliation when HIGH vulnerabilities are found by Trivy.")
+	flag.BoolVar(&scanModules, "scan-modules", false,
+		"Enable Trivy IaC scanning for module version archives when scanning-enabled is true.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	opts := zap.Options{
@@ -207,9 +225,15 @@ func main() {
 	}
 
 	if err := (&controller.VersionReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Log:    logger,
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		Log:             logger,
+		ScanningEnabled: scanningEnabled,
+		ScanModules:     scanModules,
+		TrivyCacheDir:   trivyCacheDir,
+		ScanOffline:     scanOffline,
+		BlockOnCritical: scanBlockOnCritical,
+		BlockOnHigh:     scanBlockOnHigh,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Version")
 		os.Exit(1)

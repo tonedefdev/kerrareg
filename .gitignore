@@ -42,3 +42,4 @@ examples/internal-developer-portal/.vite/*
 
 site/*
 .cache/*
+.session-memory/*

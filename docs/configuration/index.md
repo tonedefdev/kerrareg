@@ -37,4 +37,10 @@ Configure OpenDepot for your environment. All configuration is done through Helm
 
     Set up GPG signing for provider `SHA256SUMS` files so OpenTofu can cryptographically verify provider archives.
 
+- :material-shield-search: &nbsp;[__Vulnerability Scanning__](scanning.md)
+
+    ---
+
+    Enable Trivy-based vulnerability scanning for provider binaries and source dependencies, with optional policy enforcement to block critical or high findings.
+
 </div>

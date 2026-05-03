@@ -33,14 +33,6 @@ import (
 const namespace = "opendepot-system"
 
 var _ = Describe("Version", Ordered, func() {
-	const (
-		moduleCRName      = "terraform-aws-key-pair"
-		moduleVersion     = "2.0.0"
-		versionCRName     = "terraform-aws-key-pair-2.0.0"
-		moduleProvider    = "aws"
-		moduleStoragePath = "/data/modules"
-	)
-
 	var controllerPodName string
 
 	AfterEach(func() {
@@ -102,68 +94,108 @@ var _ = Describe("Version", Ordered, func() {
 		})
 	})
 
-	Context("Version CR", func() {
-		AfterAll(func() {
-			By("removing the test Module CR")
-			cmd := exec.Command("kubectl", "delete", "module", moduleCRName,
-				"-n", namespace, "--ignore-not-found")
-			_, _ = utils.Run(cmd)
+	Context("Version CR", Ordered, func() {
+		const (
+			versionCRName = "version-e2e-dual-config"
+			storageDir    = "/data/modules"
+			providerName  = "null"
+			testFileName  = "null.zip"
+			testVersion   = "3.2.3"
+		)
 
+		AfterAll(func() {
 			By("removing the test Version CR")
-			cmd = exec.Command("kubectl", "delete", "version", versionCRName,
+			cmd := exec.Command("kubectl", "delete", "version", versionCRName,
 				"-n", namespace, "--ignore-not-found")
 			_, _ = utils.Run(cmd)
 		})
 
-		It("should reconcile a Version CR created by the Module controller", func() {
-			By("applying the test Module CR")
-			moduleYAML := fmt.Sprintf(`apiVersion: opendepot.defdev.io/v1alpha1
-kind: Module
+		It("should add the opendepot finalizer to a Version CR", func() {
+			By("applying a Provider-type Version CR with both moduleConfigRef and providerConfigRef")
+			versionYAML := fmt.Sprintf(`apiVersion: opendepot.defdev.io/v1alpha1
+kind: Version
 metadata:
   name: %s
   namespace: %s
 spec:
-  moduleConfig:
-    fileFormat: zip
-    githubClientConfig:
-      useAuthenticatedClient: false
-    provider: %s
-    repoOwner: terraform-aws-modules
-    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-key-pair
+  type: Provider
+  version: %q
+  fileName: %q
+  providerConfigRef:
+    name: %q
     storageConfig:
       fileSystem:
         directoryPath: %s
-  versions:
-    - version: "%s"
-`, moduleCRName, namespace, moduleProvider, moduleStoragePath, moduleVersion)
+  moduleConfigRef:
+    storageConfig:
+      fileSystem:
+        directoryPath: %s
+`, versionCRName, namespace, testVersion, testFileName, providerName, storageDir, storageDir)
 
-			moduleFile := filepath.Join(GinkgoT().TempDir(), "test-module.yaml")
-			Expect(os.WriteFile(moduleFile, []byte(moduleYAML), 0600)).To(Succeed())
-			cmd := exec.Command("kubectl", "apply", "-f", moduleFile)
+			versionFile := filepath.Join(GinkgoT().TempDir(), "test-version.yaml")
+			Expect(os.WriteFile(versionFile, []byte(versionYAML), 0600)).To(Succeed())
+
+			cmd := exec.Command("kubectl", "apply", "-f", versionFile)
 			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to apply Module CR")
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply Version CR")
 
-			By("waiting for the Version CR to be created by the module controller")
-			verifyVersionExists := func(g Gomega) {
+			By("waiting for the opendepot finalizer to be added")
+			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "version", versionCRName,
 					"-n", namespace,
+					"-o", "jsonpath={.metadata.finalizers}",
 				)
-				_, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred(), "Version CR should exist")
-			}
-			Eventually(verifyVersionExists, 2*time.Minute).Should(Succeed())
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(ContainSubstring("opendepot.defdev.io/finalizer"),
+					"expected opendepot finalizer to be present on the Version CR")
+			}).Should(Succeed())
+		})
 
-			By("waiting for the Version CR to be synced by the version controller")
-			verifyVersionSynced := func(g Gomega) {
+		It("should not successfully sync a Version CR with conflicting moduleConfigRef and providerConfigRef", func() {
+			By("waiting for the dual-config syncStatus message to be written")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "version", versionCRName,
+					"-n", namespace,
+					"-o", "jsonpath={.status.syncStatus}",
+				)
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(ContainSubstring("both are defined"),
+					"expected dual-config guard syncStatus message to be written")
+			}).Should(Succeed())
+
+			By("confirming the Version CR never reaches synced=true")
+			Consistently(func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "version", versionCRName,
 					"-n", namespace,
 					"-o", "jsonpath={.status.synced}",
 				)
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("true"), "Version CR should be synced")
-			}
-			Eventually(verifyVersionSynced, 5*time.Minute).Should(Succeed())
+				g.Expect(output).NotTo(Equal("true"),
+					"Version CR with both moduleConfigRef and providerConfigRef must not sync successfully")
+			}, 15*time.Second, 3*time.Second).Should(Succeed())
+		})
+
+		It("should fully remove the Version CR after deletion", func() {
+			By("deleting the Version CR")
+			cmd := exec.Command("kubectl", "delete", "version", versionCRName,
+				"-n", namespace,
+			)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to delete Version CR")
+
+			By("waiting for the Version CR to be fully removed")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "version", versionCRName,
+					"-n", namespace,
+					"--ignore-not-found",
+				)
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(BeEmpty(), "Version CR should be fully removed")
+			}, 2*time.Minute).Should(Succeed())
 		})
 	})
 })

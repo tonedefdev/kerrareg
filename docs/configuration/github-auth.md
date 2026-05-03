@@ -30,3 +30,23 @@ Then enable authenticated access in your module config:
 githubClientConfig:
   useAuthenticatedClient: true
 ```
+
+## Provider Source Scanning
+
+The same `opendepot-github-application-secret` Secret and `githubClientConfig` field are also supported for **provider source scanning**. This is useful when the provider's source repository is private or when unauthenticated requests exceed GitHub API rate limits during source scans.
+
+Set `githubClientConfig` on the `providerConfig` in your `Provider` resource:
+
+```yaml
+spec:
+  providerConfig:
+    name: myprovider
+    namespace: my-org
+    githubClientConfig:
+      useAuthenticatedClient: true
+```
+
+!!! note
+    If the `opendepot-github-application-secret` Secret is missing or the authenticated client cannot be created, the Version controller falls back to an unauthenticated client automatically. Source scanning continues without interruption.
+
+No new Secret is required if modules in the same namespace already use GitHub App authentication — the controller reads the same Secret for both.

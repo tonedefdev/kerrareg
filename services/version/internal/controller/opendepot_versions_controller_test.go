@@ -19,66 +19,123 @@ package controller
 import (
 	"context"
 
+	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	opendepotv1alpha1 "github.com/tonedefdev/opendepot/api/v1alpha1"
 )
 
-var _ = Describe("Module Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+var _ = Describe("Version Controller", func() {
+	ctx := context.Background()
 
-		ctx := context.Background()
+	Context("Reconcile", func() {
+		It("should return an error when the Version type is not recognized", func() {
+			const resourceName = "test-unrecognized-type"
+			namespacedName := types.NamespacedName{Name: resourceName, Namespace: "default"}
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
-		resource2 := &opendepotv1alpha1.Version{}
-
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind Module")
-			err := k8sClient.Get(ctx, typeNamespacedName, resource2)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &opendepotv1alpha1.Version{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			resource := &opendepotv1alpha1.Version{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       resourceName,
+					Namespace:  "default",
+					Finalizers: []string{opendepotv1alpha1.OpenDepotFinalizer},
+				},
+				Spec: opendepotv1alpha1.VersionSpec{
+					Type:    "UnrecognizedType",
+					Version: "1.0.0",
+				},
 			}
-		})
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			DeferCleanup(func() {
+				current := &opendepotv1alpha1.Version{}
+				if err := k8sClient.Get(ctx, namespacedName, current); err == nil {
+					current.Finalizers = nil
+					_ = k8sClient.Update(ctx, current)
+					_ = k8sClient.Delete(ctx, current)
+				}
+			})
 
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &opendepotv1alpha1.Version{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance Module")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-				controllerReconciler := &VersionReconciler{
+			reconciler := &VersionReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
+				Log:    logr.Discard(),
 			}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no usable type provided"))
+		})
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
+		It("should return an error when a Provider Version is missing providerConfigRef", func() {
+			const resourceName = "test-provider-no-ref"
+			namespacedName := types.NamespacedName{Name: resourceName, Namespace: "default"}
+
+			resource := &opendepotv1alpha1.Version{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       resourceName,
+					Namespace:  "default",
+					Finalizers: []string{opendepotv1alpha1.OpenDepotFinalizer},
+				},
+				Spec: opendepotv1alpha1.VersionSpec{
+					Type:    opendepotv1alpha1.OpenDepotProvider,
+					Version: "1.0.0",
+				},
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			DeferCleanup(func() {
+				current := &opendepotv1alpha1.Version{}
+				if err := k8sClient.Get(ctx, namespacedName, current); err == nil {
+					current.Finalizers = nil
+					_ = k8sClient.Update(ctx, current)
+					_ = k8sClient.Delete(ctx, current)
+				}
 			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			reconciler := &VersionReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Log:    logr.Discard(),
+			}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("providerConfigRef is required"))
+		})
+
+		It("should return an error when a Module Version is missing moduleConfigRef name", func() {
+			const resourceName = "test-module-no-ref"
+			namespacedName := types.NamespacedName{Name: resourceName, Namespace: "default"}
+
+			resource := &opendepotv1alpha1.Version{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       resourceName,
+					Namespace:  "default",
+					Finalizers: []string{opendepotv1alpha1.OpenDepotFinalizer},
+				},
+				Spec: opendepotv1alpha1.VersionSpec{
+					Type:    opendepotv1alpha1.OpenDepotModule,
+					Version: "1.0.0",
+				},
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			DeferCleanup(func() {
+				current := &opendepotv1alpha1.Version{}
+				if err := k8sClient.Get(ctx, namespacedName, current); err == nil {
+					current.Finalizers = nil
+					_ = k8sClient.Update(ctx, current)
+					_ = k8sClient.Delete(ctx, current)
+				}
+			})
+
+			reconciler := &VersionReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Log:    logr.Discard(),
+			}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("moduleConfigRef.name is required"))
 		})
 	})
 })

@@ -55,6 +55,8 @@ rules:
   - providers
   verbs:
   - get
+  - list
+  - watch
 - apiGroups:
   - opendepot.defdev.io
   resources:
