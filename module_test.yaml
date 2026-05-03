@@ -1,0 +1,16 @@
+apiVersion: opendepot.defdev.io/v1alpha1
+kind: Module
+metadata:
+  name: terraform-aws-s3-bucket
+  namespace: opendepot-system
+spec:
+  moduleConfig:
+    provider: aws
+    repoOwner: terraform-aws-modules
+    repoUrl: https://github.com/terraform-aws-modules/terraform-aws-s3-bucket
+    fileFormat: zip
+    storageConfig:
+      fileSystem:
+        directoryPath: /data/modules
+  versions:
+    - version: "5.12.0"

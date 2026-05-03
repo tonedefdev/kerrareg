@@ -23,6 +23,34 @@ module "aks" {
 
 The source format is `<registry-host>/<namespace>/<name>/<provider>`, where `<namespace>` is the Kubernetes namespace where the `Module` resource lives.
 
+## Inline Module Configuration
+
+`moduleConfigRef.name` is optional on a `Version` CR. When `name` is omitted, or when no `Module` CR with that name exists in the namespace, the Version controller treats all fields on `moduleConfigRef` as fully inline. A UUID-based filename is generated automatically so the archive has a stable storage key, and the download proceeds using the GitHub and storage config set directly on the `Version` CR.
+
+This is useful when running the version controller standalone (without the module controller), or for one-off version testing where creating a full `Module` CR is unnecessary.
+
+```yaml
+apiVersion: opendepot.defdev.io/v1alpha1
+kind: Version
+metadata:
+  name: terraform-aws-s3-bucket-4.3.0
+  namespace: opendepot-system
+spec:
+  type: Module
+  version: "4.3.0"
+  moduleConfigRef:
+    repoOwner: terraform-aws-modules
+    repoUrl: "https://github.com/terraform-aws-modules/terraform-aws-s3-bucket"
+    githubClientConfig:
+      useAuthenticatedClient: false
+    storageConfig:
+      fileSystem:
+        directoryPath: /data/modules
+```
+
+!!! note
+    When `name` is omitted the `Version` CR is completely self-contained. No `Module` CR needs to exist in the namespace.
+
 ## Vulnerability Scanning
 
 When [scanning is enabled](../configuration/scanning.md), the Version controller runs a Trivy IaC scan on the extracted module archive and stores findings on the `Version` resource.

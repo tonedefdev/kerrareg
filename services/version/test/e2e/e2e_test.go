@@ -198,4 +198,73 @@ spec:
 			}, 2*time.Minute).Should(Succeed())
 		})
 	})
+
+	Context("Module IaC Scan", Ordered, func() {
+		const (
+			scanVersionName = "terraform-aws-s3-bucket-4.3.0"
+			scanModuleName  = "terraform-aws-s3-bucket"
+			scanVersion     = "4.3.0"
+			scanRepoOwner   = "terraform-aws-modules"
+			scanRepoURL     = "https://github.com/terraform-aws-modules/terraform-aws-s3-bucket"
+			scanStorageDir  = "/data/modules"
+		)
+
+		AfterAll(func() {
+			By("removing the Module IaC Scan Version CR")
+			cmd := exec.Command("kubectl", "delete", "version", scanVersionName,
+				"-n", namespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should produce IaC findings for a module with known misconfigurations", func() {
+			By("applying an inline module Version CR for terraform-aws-s3-bucket 4.3.0")
+			versionYAML := fmt.Sprintf(`apiVersion: opendepot.defdev.io/v1alpha1
+kind: Version
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  type: Module
+  version: %q
+  moduleConfigRef:
+    name: %q
+    repoOwner: %q
+    repoUrl: %q
+    githubClientConfig:
+      useAuthenticatedClient: false
+    storageConfig:
+      fileSystem:
+        directoryPath: %s
+`, scanVersionName, namespace, scanVersion, scanModuleName, scanRepoOwner, scanRepoURL, scanStorageDir)
+
+			versionFile := filepath.Join(GinkgoT().TempDir(), "scan-version.yaml")
+			Expect(os.WriteFile(versionFile, []byte(versionYAML), 0600)).To(Succeed())
+
+			cmd := exec.Command("kubectl", "apply", "-f", versionFile)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply Module IaC Scan Version CR")
+
+			By("waiting for the Version CR to reach synced=true (network download involved)")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "version", scanVersionName,
+					"-n", namespace,
+					"-o", "jsonpath={.status.synced}",
+				)
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("true"),
+					"expected Version CR to reach synced=true")
+			}, 5*time.Minute, 10*time.Second).Should(Succeed())
+
+			By("asserting that status.sourceScan.findings contains at least one AVD- rule ID")
+			cmd = exec.Command("kubectl", "get", "version", scanVersionName,
+				"-n", namespace,
+				"-o", "jsonpath={.status.sourceScan.findings}",
+			)
+			findings, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(findings).To(ContainSubstring("AVD-"),
+				"expected sourceScan.findings to contain at least one AVD- rule ID")
+		})
+	})
 })

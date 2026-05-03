@@ -43,22 +43,6 @@ The PVC must use a `StorageClass` that supports `ReadWriteMany` access so that t
 !!! note
     The Trivy DB (PVC + CronJob) is only required for **provider** binary and source scans. Module IaC scanning uses config rules bundled in the Trivy binary and works without a populated DB cache.
 
-## Memory Requirements
-
-When scanning is enabled, the version-controller loads the Trivy vulnerability database into memory during each reconciliation. The default memory limit of `512Mi` is insufficient for this workload and will cause the controller pod to be OOMKilled (exit code 137).
-
-Set `version.resources.limits.memory` to at least `2Gi` when scanning is enabled:
-
-```bash
-helm upgrade opendepot opendepot/opendepot \
-  --reuse-values \
-  --set scanning.enabled=true \
-  --set version.resources.limits.memory=2Gi \
-  --set version.resources.requests.memory=256Mi
-```
-
-The chart ships with these values as defaults from version `0.2.3` onwards, so a fresh install does not require the flags above.
-
 ## Enabling Scanning
 
 ```yaml

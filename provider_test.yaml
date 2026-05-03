@@ -1,0 +1,21 @@
+apiVersion: opendepot.defdev.io/v1alpha1
+kind: Provider
+metadata:
+  name: aws
+  namespace: opendepot-system
+spec:
+  providerConfig:
+    name: aws
+    namespace: hashicorp
+    sourceRepository: "https://github.com/hashicorp/terraform-provider-aws"
+    operatingSystems:
+      - linux
+      - darwin
+    architectures:
+      - amd64
+      - arm64
+    storageConfig:
+      fileSystem:
+        directoryPath: /data/modules
+  versions:
+    - version: "5.80.0"

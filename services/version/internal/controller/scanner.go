@@ -157,14 +157,16 @@ func resolveProviderSourceRepository(ctx context.Context, namespace, providerNam
 		strings.TrimSpace(namespace), strings.TrimSpace(providerName))
 }
 
-// extractBinaryFromZip extracts the provider executable from a HashiCorp release zip.
-// The zip contains exactly one file: the compiled provider binary. We skip any
-// accompanying README or LICENSE files by filtering on common non-binary suffixes.
-func extractBinaryFromZip(archiveBytes []byte) ([]byte, error) {
-	zr, err := zip.NewReader(bytes.NewReader(archiveBytes), int64(len(archiveBytes)))
+// extractBinaryFromZip extracts the provider executable from a HashiCorp release zip
+// at archivePath on disk. The zip contains exactly one file: the compiled provider
+// binary. We skip any accompanying README or LICENSE files by filtering on common
+// non-binary suffixes and the absence of the executable bit.
+func extractBinaryFromZip(archivePath string) ([]byte, error) {
+	zr, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open provider zip archive: %w", err)
 	}
+	defer zr.Close()
 
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
@@ -208,11 +210,13 @@ func downloadGoMod(ctx context.Context, repoURL, version string, githubClient *g
 	return opendepotGithub.GetProviderGoMod(ctx, githubClient, parts[0], parts[1], version)
 }
 
-// scanProviderBinary runs `trivy rootfs` against the provider executable extracted from archiveBytes.
-// archiveBytes is the raw HashiCorp release zip. The binary is extracted before scanning.
+// scanProviderBinary runs `trivy rootfs` against the provider executable extracted
+// from the zip at archivePath on disk. Reading from disk (rather than from a []byte
+// held in the Go heap) ensures the full ~700 MB provider archive and the ~2 GB
+// Trivy vulnerability DB are never resident in memory simultaneously.
 // When offline is true, --offline-scan is passed to Trivy so it does not attempt network calls.
-func (r *VersionReconciler) scanProviderBinary(ctx context.Context, archiveBytes []byte, cacheDir string, offline bool) ([]opendepotv1alpha1.SecurityFinding, error) {
-	binaryBytes, err := extractBinaryFromZip(archiveBytes)
+func (r *VersionReconciler) scanProviderBinary(ctx context.Context, archivePath string, cacheDir string, offline bool) ([]opendepotv1alpha1.SecurityFinding, error) {
+	binaryBytes, err := extractBinaryFromZip(archivePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract binary from provider archive: %w", err)
 	}
@@ -234,7 +238,14 @@ func (r *VersionReconciler) scanProviderBinary(ctx context.Context, archiveBytes
 	}
 	args = append(args, "--cache-dir", cacheDir, "--quiet", tmpDir)
 
+	// Serialise Trivy invocations: each process loads the full ~2 GiB DB.
+	select {
+	case r.scanSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	output, err := runTrivy(ctx, args...)
+	<-r.scanSem
 	if err != nil {
 		return nil, fmt.Errorf("binary scan failed: %w", err)
 	}
@@ -278,7 +289,14 @@ func (r *VersionReconciler) scanProviderSource(ctx context.Context, repoURL, ver
 	}
 	args = append(args, "--cache-dir", cacheDir, "--quiet", tmpDir)
 
+	// Serialise Trivy invocations: each process loads the full ~2 GiB DB.
+	select {
+	case r.scanSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	output, err := runTrivy(ctx, args...)
+	<-r.scanSem
 	if err != nil {
 		return nil, fmt.Errorf("source scan failed: %w", err)
 	}
@@ -293,6 +311,7 @@ func (r *VersionReconciler) scanProviderSource(ctx context.Context, repoURL, ver
 }
 
 // runProviderScan orchestrates source and binary Trivy scans for a provider Version.
+// archivePath is the path to the provider zip on disk (as written by httpStreamToFile).
 // It returns the binary scan result (if successful) to be persisted by the caller
 // alongside the other status fields, avoiding partial status updates that would
 // violate the CRD required-field validation (checksum, synced, syncStatus are all
@@ -306,7 +325,7 @@ func (r *VersionReconciler) scanProviderSource(ctx context.Context, repoURL, ver
 func (r *VersionReconciler) runProviderScan(
 	ctx context.Context,
 	version *opendepotv1alpha1.Version,
-	archiveBytes []byte,
+	archivePath string,
 	cacheDir string,
 	offline bool,
 	blockOnCritical bool,
@@ -319,7 +338,7 @@ func (r *VersionReconciler) runProviderScan(
 
 	// Binary scan (always runs, unique per OS/arch)
 	var binaryScan *opendepotv1alpha1.ProviderBinaryScan
-	binaryFindings, err := r.scanProviderBinary(ctx, archiveBytes, cacheDir, offline)
+	binaryFindings, err := r.scanProviderBinary(ctx, archivePath, cacheDir, offline)
 	if err != nil {
 		r.Log.Error(err, "Binary scan failed — continuing without scan results",
 			"version", version.Name)
@@ -551,7 +570,14 @@ func (r *VersionReconciler) scanModuleArchive(ctx context.Context, archiveBytes 
 	// the vulnerability DB, so this works correctly with --offline-scan.
 	args := []string{"fs", "--format", "json", "--scanners", "misconfig"}
 
+	// Serialise Trivy invocations: each process loads the full ~2 GiB DB.
+	select {
+	case r.scanSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	output, err := runTrivy(ctx, args...)
+	<-r.scanSem
 	if err != nil {
 		return nil, fmt.Errorf("module source scan failed: %w", err)
 	}

@@ -106,11 +106,17 @@ func (storage *AzureBlobStorage) PutObject(ctx context.Context, soi *storagetype
 		return err
 	}
 
-	bufferOptions := &azblob.UploadBufferOptions{
-		Concurrency: 10,
+	if soi.FileReader != nil {
+		streamOptions := &azblob.UploadStreamOptions{
+			Concurrency: 10,
+		}
+		_, err = storage.blobClient.UploadStream(ctx, *ctr.Name, *soi.FilePath, soi.FileReader, streamOptions)
+	} else {
+		bufferOptions := &azblob.UploadBufferOptions{
+			Concurrency: 10,
+		}
+		_, err = storage.blobClient.UploadBuffer(ctx, *ctr.Name, *soi.FilePath, soi.FileBytes, bufferOptions)
 	}
-
-	_, err = storage.blobClient.UploadBuffer(ctx, *ctr.Name, *soi.FilePath, soi.FileBytes, bufferOptions)
 	if err != nil {
 		return err
 	}

@@ -135,7 +135,7 @@ var _ = Describe("Version Controller", func() {
 			}
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("moduleConfigRef.name is required"))
+			Expect(err.Error()).To(ContainSubstring("moduleConfigRef is required"))
 		})
 	})
 })

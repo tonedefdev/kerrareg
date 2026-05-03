@@ -58,13 +58,18 @@ func (storage *FileSystem) GetObjectChecksum(ctx context.Context, soi *types.Sto
 		return err
 	}
 
-	fileBytes, err := os.ReadFile(*soi.FilePath)
+	f, err := os.Open(*soi.FilePath)
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 
-	sha256Sum := sha256.Sum256(fileBytes)
-	checksumSha256 := base64.StdEncoding.EncodeToString(sha256Sum[:])
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+
+	checksumSha256 := base64.StdEncoding.EncodeToString(h.Sum(nil))
 	soi.ObjectChecksum = &checksumSha256
 	soi.FileExists = true
 	return nil
@@ -97,12 +102,20 @@ func (storage *FileSystem) PutObject(ctx context.Context, soi *types.StorageObje
 		}
 	}
 
-	permissions := os.FileMode(0644)
-	if err := os.WriteFile(
-		*soi.FilePath,
-		soi.FileBytes,
-		permissions,
-	); err != nil {
+	out, err := os.OpenFile(*soi.FilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if soi.FileReader != nil {
+		if _, err := io.Copy(out, soi.FileReader); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if _, err := out.Write(soi.FileBytes); err != nil {
 		return err
 	}
 

@@ -20,10 +20,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -61,6 +63,14 @@ type VersionReconciler struct {
 	ScanOffline     bool
 	BlockOnCritical bool
 	BlockOnHigh     bool
+	// scanSem limits the number of concurrent Trivy processes. Each Trivy
+	// invocation loads the full vulnerability DB (~2 GiB) so running more than
+	// one at a time risks OOMKill even with a generous container memory limit.
+	scanSem chan struct{}
+	// downloadSem limits the number of concurrent provider archive downloads.
+	// Each download streams a ~700 MB zip to disk; allowing all four workers to
+	// download simultaneously risks exhausting memory and disk I/O.
+	downloadSem chan struct{}
 }
 
 // +kubebuilder:rbac:groups=opendepot.defdev.io,resources=versions,verbs=get;list;watch;create;update;patch;delete
@@ -133,6 +143,7 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	var fileBytes []byte
 	var archiveChecksum *string
+	var providerTmpPath string
 
 	switch version.Spec.Type {
 	case opendepotv1alpha1.OpenDepotModule:
@@ -159,12 +170,42 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, statusMsg
 		}
 	case opendepotv1alpha1.OpenDepotProvider:
-		providerBytes, checksum, fileName, err := r.fetchProviderArchive(ctx, version)
+		// Fast path: if the Version has already been synced and the artifact exists in
+		// storage with a matching checksum, there is nothing to download or upload.
+		// Skipping the download is critical — /tmp is tmpfs (RAM-backed) in Linux
+		// containers, so downloading 700MB per worker on every reconcile exhausts memory.
+		if version.Status.Checksum != nil && version.Status.Synced && version.Spec.FileName != nil {
+			existingFilePath, pathErr := getVersionFilePath(version)
+			if pathErr == nil {
+				earlySoi := &types.StorageObjectInput{
+					Method:   types.Get,
+					FilePath: existingFilePath,
+					Version:  version,
+				}
+				if checkErr := r.InitStorageFactory(ctx, earlySoi); checkErr == nil &&
+					earlySoi.FileExists &&
+					earlySoi.ObjectChecksum != nil &&
+					*earlySoi.ObjectChecksum == *version.Status.Checksum {
+					return reconcile.Result{}, nil
+				}
+			}
+		}
+
+		// Serialize provider downloads: each is ~700 MB and concurrent downloads
+		// exhaust memory. The semaphore ensures only one download runs at a time.
+		select {
+		case r.downloadSem <- struct{}{}:
+		case <-ctx.Done():
+			return ctrl.Result{}, ctx.Err()
+		}
+		tmpPath, cleanupArchive, checksum, fileName, err := r.fetchProviderArchive(ctx, version)
+		<-r.downloadSem
 		if err != nil {
 			version.Status.SyncStatus = fmt.Sprintf("Failed to retrieve provider archive from HashiCorp releases API: %v", err)
 			_ = r.Status().Update(ctx, version)
 			return ctrl.Result{}, err
 		}
+		defer cleanupArchive()
 
 		if version.Spec.FileName == nil {
 			uuidFileName, err := generateProviderFileName(*fileName)
@@ -176,8 +217,8 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			version.Spec.FileName = uuidFileName
 		}
 
-		fileBytes = providerBytes
 		archiveChecksum = checksum
+		providerTmpPath = tmpPath
 	}
 
 	filePath, err := getVersionFilePath(version)
@@ -185,10 +226,28 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
+	// For providers the archive is on disk (providerTmpPath); open it as a ReadSeeker so
+	// storage backends can stream it without ever loading the full zip into the Go heap.
+	var providerFile *os.File
+	if providerTmpPath != "" {
+		pf, openErr := os.Open(providerTmpPath)
+		if openErr != nil {
+			version.Status.SyncStatus = fmt.Sprintf("Failed to open provider archive temp file: %v", openErr)
+			_ = r.Status().Update(ctx, version)
+			return ctrl.Result{}, openErr
+		}
+		defer pf.Close()
+		providerFile = pf
+	}
+
+	// hasArtifact indicates whether we have bytes (module) or a temp file (provider) to upload.
+	hasArtifact := len(fileBytes) > 0 || providerFile != nil
+
 	soi := &types.StorageObjectInput{
-		FileBytes: fileBytes,
-		FilePath:  filePath,
-		Version:   version,
+		FileBytes:  fileBytes,
+		FileReader: providerFile,
+		FilePath:   filePath,
+		Version:    version,
 	}
 
 	if version.Status.Checksum != nil {
@@ -197,7 +256,7 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, err
 		}
 	} else {
-		if len(fileBytes) == 0 {
+		if !hasArtifact {
 			version.Status.Synced = false
 			version.Status.SyncStatus = "No artifact bytes available for upload yet"
 			_ = r.Status().Update(ctx, version)
@@ -211,11 +270,18 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	if !soi.FileExists || (soi.ObjectChecksum != nil && version.Status.Checksum != nil && *soi.ObjectChecksum != *version.Status.Checksum) {
-		if len(fileBytes) == 0 {
+		if !hasArtifact {
 			version.Status.Synced = false
 			version.Status.SyncStatus = "Artifact missing in storage and no bytes available to reconcile"
 			_ = r.Status().Update(ctx, version)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		// Seek back to the start so the storage backend can re-read the provider archive.
+		if providerFile != nil {
+			if _, seekErr := providerFile.Seek(0, io.SeekStart); seekErr != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to seek provider archive: %w", seekErr)
+			}
 		}
 
 		soi.Method = types.Put
@@ -246,10 +312,15 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// The binary scan result is returned here and written in the final status
 	// update below so that all required fields (checksum, synced, syncStatus)
 	// are set atomically and satisfy CRD required-field validation.
+	//
+	// Free the in-memory zip bytes before invoking Trivy so that the ~700 MB
+	// provider archive and the ~2 GB Trivy vulnerability DB are never resident
+	// in the Go heap simultaneously. The scan reads the zip directly from the
+	// temp file on disk instead.
 	var binaryScan *opendepotv1alpha1.ProviderBinaryScan
-	if r.ScanningEnabled && version.Spec.Type == opendepotv1alpha1.OpenDepotProvider && len(fileBytes) > 0 {
+	if r.ScanningEnabled && version.Spec.Type == opendepotv1alpha1.OpenDepotProvider && providerTmpPath != "" {
 		var scanErr error
-		binaryScan, scanErr = r.runProviderScan(ctx, version, fileBytes, r.TrivyCacheDir, r.ScanOffline, r.BlockOnCritical, r.BlockOnHigh)
+		binaryScan, scanErr = r.runProviderScan(ctx, version, providerTmpPath, r.TrivyCacheDir, r.ScanOffline, r.BlockOnCritical, r.BlockOnHigh)
 		if scanErr != nil {
 			version.Status.Synced = false
 			version.Status.SyncStatus = fmt.Sprintf("Scan policy violation: %v", scanErr)
@@ -335,14 +406,40 @@ func (r *VersionReconciler) reconcileDeletion(ctx context.Context, version *open
 }
 
 // prepareModuleVersion resolves the backing Module metadata required to reconcile a module Version.
+// When moduleConfigRef.name is absent, or when no Module CR with that name exists in the namespace,
+// the config is treated as fully inline: a UUID filename is generated so getVersionFilePath has a
+// stable storage key, and the GitHub download proceeds using the fields already on moduleConfigRef.
 func (r *VersionReconciler) prepareModuleVersion(ctx context.Context, req ctrl.Request, version *opendepotv1alpha1.Version) (ctrl.Result, error) {
-	if version.Spec.ModuleConfigRef == nil || version.Spec.ModuleConfigRef.Name == nil {
-		return ctrl.Result{}, fmt.Errorf("moduleConfigRef.name is required for module version '%s'", version.Name)
+	if version.Spec.ModuleConfigRef == nil {
+		return ctrl.Result{}, fmt.Errorf("moduleConfigRef is required for module version '%s'", version.Name)
+	}
+
+	// No Module CR name provided — the caller supplied all config inline.
+	if version.Spec.ModuleConfigRef.Name == nil {
+		if version.Spec.FileName == nil {
+			uuidFileName, err := generateModuleFileName(version.Spec.ModuleConfigRef.FileFormat)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to generate UUID filename for module archive: %w", err)
+			}
+			version.Spec.FileName = uuidFileName
+		}
+		return ctrl.Result{}, nil
 	}
 
 	moduleObject := client.ObjectKey{Name: *version.Spec.ModuleConfigRef.Name, Namespace: req.Namespace}
 	module := &opendepotv1alpha1.Module{}
 	if err := r.Get(ctx, moduleObject, module); err != nil {
+		if k8serr.IsNotFound(err) {
+			// No backing Module CR — treat as inline config, using Name as the GitHub repo name.
+			if version.Spec.FileName == nil {
+				uuidFileName, err := generateModuleFileName(version.Spec.ModuleConfigRef.FileFormat)
+				if err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to generate UUID filename for module archive: %w", err)
+				}
+				version.Spec.FileName = uuidFileName
+			}
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -415,6 +512,21 @@ func (r *VersionReconciler) fetchModuleArchive(ctx context.Context, version *ope
 	return opendepotGithub.GetModuleArchiveFromRef(ctx, r.Log, githubClient, version, fileFormat)
 }
 
+// generateModuleFileName returns a randomly generated UUID7 filename for a module archive.
+// The default extension is .tar.gz; pass fileFormat = "zip" to get a .zip extension.
+func generateModuleFileName(fileFormat *string) (*string, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return nil, err
+	}
+	ext := ".tar.gz"
+	if fileFormat != nil && *fileFormat == "zip" {
+		ext = ".zip"
+	}
+	name := fmt.Sprintf("%s%s", id, ext)
+	return &name, nil
+}
+
 // generateProviderFileName returns a randomly generated UUID7 filename, preserving the original file extension.
 func generateProviderFileName(originalFileName string) (*string, error) {
 	id, err := uuid.NewV7()
@@ -427,20 +539,23 @@ func generateProviderFileName(originalFileName string) (*string, error) {
 	return &name, nil
 }
 
-// fetchProviderArchive resolves a provider binary download from the OpenTofu registry and downloads the artifact.
-func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *opendepotv1alpha1.Version) ([]byte, *string, *string, error) {
+// fetchProviderArchive resolves a provider binary download from the OpenTofu registry
+// and streams the artifact to a temporary file on disk to avoid buffering the
+// full provider zip (~700 MB) in the Go heap. The caller must invoke the returned
+// cleanup function (typically via defer) to remove the temp file.
+func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *opendepotv1alpha1.Version) (archivePath string, cleanup func(), checksum *string, fileName *string, err error) {
 	if version.Spec.ProviderConfigRef == nil || version.Spec.ProviderConfigRef.Name == nil {
-		return nil, nil, nil, fmt.Errorf("providerConfigRef.name is required")
+		return "", func() {}, nil, nil, fmt.Errorf("providerConfigRef.name is required")
 	}
 
 	if strings.TrimSpace(version.Spec.OperatingSystem) == "" || strings.TrimSpace(version.Spec.Architecture) == "" {
-		return nil, nil, nil, fmt.Errorf("provider operatingSystem and architecture are required")
+		return "", func() {}, nil, nil, fmt.Errorf("provider operatingSystem and architecture are required")
 	}
 
 	providerName := strings.TrimSpace(*version.Spec.ProviderConfigRef.Name)
 	providerVersion := strings.TrimPrefix(strings.TrimSpace(version.Spec.Version), "v")
 	if providerVersion == "" {
-		return nil, nil, nil, fmt.Errorf("provider version is empty")
+		return "", func() {}, nil, nil, fmt.Errorf("provider version is empty")
 	}
 
 	providerNamespace := "hashicorp"
@@ -453,36 +568,38 @@ func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *o
 	download, err := lookupProviderDownload(ctx, providerNamespace, providerName, providerVersion,
 		version.Spec.OperatingSystem, version.Spec.Architecture)
 	if err != nil {
-		return nil, nil, nil, err
+		return "", func() {}, nil, nil, err
 	}
 
-	fileBytes, err := httpGetBytes(ctx, download.DownloadURL)
+	tmpPath, checksumHex, cleanupFn, err := httpStreamToFile(ctx, download.DownloadURL)
 	if err != nil {
-		return nil, nil, nil, err
+		return "", func() {}, nil, nil, err
 	}
-
-	checksumRaw := sha256.Sum256(fileBytes)
 
 	// Validate the downloaded archive against the registry-provided SHA256.
 	if download.Shasum != "" {
-		if got := fmt.Sprintf("%x", checksumRaw); got != strings.ToLower(download.Shasum) {
-			return nil, nil, nil, fmt.Errorf("checksum mismatch for provider archive %s: registry expected %s, got %s",
-				download.Filename, download.Shasum, got)
+		if checksumHex != strings.ToLower(download.Shasum) {
+			cleanupFn()
+			return "", func() {}, nil, nil, fmt.Errorf("checksum mismatch for provider archive %s: registry expected %s, got %s",
+				download.Filename, download.Shasum, checksumHex)
 		}
 	}
 
-	checksum := base64.StdEncoding.EncodeToString(checksumRaw[:])
+	// Re-encode the hex SHA-256 as base64 for storage (matches the existing format).
+	checksumBytes, _ := hex.DecodeString(checksumHex)
+	checksumB64 := base64.StdEncoding.EncodeToString(checksumBytes)
 
-	fileName := download.Filename
-	if fileName == "" {
-		fileName = path.Base(download.DownloadURL)
+	fn := download.Filename
+	if fn == "" {
+		fn = path.Base(download.DownloadURL)
 	}
 
-	if fileName == "." || fileName == "/" || fileName == "" {
-		return nil, nil, nil, fmt.Errorf("unable to determine filename from provider download URL '%s'", download.DownloadURL)
+	if fn == "." || fn == "/" || fn == "" {
+		cleanupFn()
+		return "", func() {}, nil, nil, fmt.Errorf("unable to determine filename from provider download URL '%s'", download.DownloadURL)
 	}
 
-	return fileBytes, &checksum, &fileName, nil
+	return tmpPath, cleanupFn, &checksumB64, &fn, nil
 }
 
 // httpGetJSON performs an HTTP GET and unmarshals the response payload into out.
@@ -500,13 +617,15 @@ func httpGetJSON(ctx context.Context, requestURL string, out any) error {
 }
 
 // httpGetBytes performs an HTTP GET and returns the raw response body bytes.
+// Use httpStreamToFile for large downloads (e.g. provider binaries) to avoid
+// buffering the full body in the Go heap.
 func httpGetBytes(ctx context.Context, requestURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed for '%s': %w", requestURL, err)
@@ -525,8 +644,60 @@ func httpGetBytes(ctx context.Context, requestURL string) ([]byte, error) {
 	return fileBytes, nil
 }
 
+// httpStreamToFile streams an HTTP GET response body to a temporary file on disk
+// while computing its SHA-256 checksum via an io.TeeReader. It returns the temp
+// file path, the hex-encoded checksum, a cleanup function that removes the file,
+// and any error. This avoids buffering large provider binaries (~700 MB) in the
+// Go heap, which is critical when multiple reconcilers run concurrently.
+func httpStreamToFile(ctx context.Context, requestURL string) (filePath string, checksumHex string, cleanup func(), err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return "", "", func() {}, err
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", func() {}, fmt.Errorf("request failed for '%s': %w", requestURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", func() {}, fmt.Errorf("request to '%s' failed with status %d", requestURL, resp.StatusCode)
+	}
+
+	f, err := os.CreateTemp("", "opendepot-provider-*.zip")
+	if err != nil {
+		return "", "", func() {}, fmt.Errorf("failed to create temp file for provider download: %w", err)
+	}
+
+	cleanupFn := func() {
+		f.Close()
+		os.Remove(f.Name())
+	}
+
+	h := sha256.New()
+	if _, err = io.Copy(f, io.TeeReader(resp.Body, h)); err != nil {
+		cleanupFn()
+		return "", "", func() {}, fmt.Errorf("failed to stream provider archive from '%s': %w", requestURL, err)
+	}
+
+	if err = f.Sync(); err != nil {
+		cleanupFn()
+		return "", "", func() {}, fmt.Errorf("failed to sync provider archive temp file: %w", err)
+	}
+
+	return f.Name(), fmt.Sprintf("%x", h.Sum(nil)), cleanupFn, nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *VersionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Allow at most one Trivy process at a time to prevent concurrent DB loads
+	// from exhausting container memory when multiple reconcilers run in parallel.
+	r.scanSem = make(chan struct{}, 1)
+	// Allow at most one provider archive download at a time. Each download is
+	// ~700 MB; concurrent downloads exhaust memory and storage I/O.
+	r.downloadSem = make(chan struct{}, 1)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&opendepotv1alpha1.Version{}).
 		Named(opendepotControllerName).

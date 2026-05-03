@@ -93,12 +93,19 @@ func (storage *AmazonS3Storage) DeleteObject(ctx context.Context, soi *storagety
 
 // PutObject puts the Version file in the specified bucket with its computed base64 encoded SHA256 checksum.
 func (storage *AmazonS3Storage) PutObject(ctx context.Context, soi *storagetypes.StorageObjectInput) error {
+	var body io.ReadSeeker
+	if soi.FileReader != nil {
+		body = soi.FileReader
+	} else {
+		body = bytes.NewReader(soi.FileBytes)
+	}
+
 	_, err := storage.client.PutObject(ctx, &s3.PutObjectInput{
 		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
 		ChecksumSHA256:    soi.ArchiveChecksum,
 		Bucket:            &soi.Version.Spec.ModuleConfigRef.StorageConfig.S3.Bucket,
 		Key:               soi.FilePath,
-		Body:              bytes.NewReader(soi.FileBytes),
+		Body:              body,
 	})
 	if err != nil {
 		return err
