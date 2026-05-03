@@ -241,10 +241,10 @@ func requestBaseURL(r *http.Request) string {
 }
 
 func getProviderSigningKeysFromEnv() (*ProviderSigningKeys, error) {
-	keyID := strings.TrimSpace(os.Getenv("KERRAREG_PROVIDER_GPG_KEY_ID"))
-	asciiArmor := os.Getenv("KERRAREG_PROVIDER_GPG_ASCII_ARMOR")
+	keyID := strings.TrimSpace(os.Getenv("OPENDEPOT_PROVIDER_GPG_KEY_ID"))
+	asciiArmor := os.Getenv("OPENDEPOT_PROVIDER_GPG_ASCII_ARMOR")
 	if keyID == "" || asciiArmor == "" {
-		return nil, fmt.Errorf("missing provider signing key env vars: KERRAREG_PROVIDER_GPG_KEY_ID and KERRAREG_PROVIDER_GPG_ASCII_ARMOR")
+		return nil, fmt.Errorf("missing provider signing key env vars: OPENDEPOT_PROVIDER_GPG_KEY_ID and OPENDEPOT_PROVIDER_GPG_ASCII_ARMOR")
 	}
 
 	keys := &ProviderSigningKeys{
@@ -252,7 +252,7 @@ func getProviderSigningKeysFromEnv() (*ProviderSigningKeys, error) {
 			{
 				KeyID:      strings.ToUpper(keyID),
 				ASCIIArmor: asciiArmor,
-				SourceURL:  strings.TrimSpace(os.Getenv("KERRAREG_PROVIDER_GPG_SOURCE_URL")),
+				SourceURL:  strings.TrimSpace(os.Getenv("OPENDEPOT_PROVIDER_GPG_SOURCE_URL")),
 			},
 		},
 	}
@@ -962,7 +962,7 @@ func getProviderPackageSHA256SUMSSignature(w http.ResponseWriter, r *http.Reques
 
 	shasumsContent := fmt.Sprintf("%s  %s\n", checksumHex, *versionResource.Spec.FileName)
 
-	privateKeyBase64 := strings.TrimSpace(os.Getenv("KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64"))
+	privateKeyBase64 := strings.TrimSpace(os.Getenv("OPENDEPOT_PROVIDER_GPG_PRIVATE_KEY_BASE64"))
 	if privateKeyBase64 == "" {
 		http.Error(w, "provider gpg private key not configured", http.StatusNotImplemented)
 		return

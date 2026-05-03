@@ -109,8 +109,8 @@ server:
     keyPath: /etc/tls/tls.key
   gpg:
     # Name of a Kubernetes Secret containing the GPG env vars for provider signing.
-    # The secret must have keys: KERRAREG_PROVIDER_GPG_KEY_ID, KERRAREG_PROVIDER_GPG_ASCII_ARMOR,
-    # KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64, and optionally KERRAREG_PROVIDER_GPG_SOURCE_URL.
+    # The secret must have keys: OPENDEPOT_PROVIDER_GPG_KEY_ID, OPENDEPOT_PROVIDER_GPG_ASCII_ARMOR,
+    # OPENDEPOT_PROVIDER_GPG_PRIVATE_KEY_BASE64, and optionally OPENDEPOT_PROVIDER_GPG_SOURCE_URL.
     secretName: ""
   resources:
     requests:

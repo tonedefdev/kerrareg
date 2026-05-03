@@ -17,12 +17,12 @@ Use an environment variable to pass a Kubernetes access token. OpenTofu (all ver
 
 The variable name is derived from the registry hostname: replace dots with underscores and convert to uppercase.
 
-`opendepot.defdev.io` → `TF_TOKEN_KERRAREG_DEFDEV_IO`
+`opendepot.defdev.io` → `TF_TOKEN_OPENDEPOT_DEFDEV_IO`
 
 === "Amazon EKS"
 
     ```bash
-    export TF_TOKEN_KERRAREG_DEFDEV_IO=$(aws eks get-token \
+    export TF_TOKEN_OPENDEPOT_DEFDEV_IO=$(aws eks get-token \
       --cluster-name my-cluster \
       --region us-west-2 \
       --output json | jq -r '.status.token')
@@ -34,7 +34,7 @@ The variable name is derived from the registry hostname: replace dots with under
 === "Google GKE"
 
     ```bash
-    export TF_TOKEN_KERRAREG_DEFDEV_IO=$(gcloud auth print-access-token)
+    export TF_TOKEN_OPENDEPOT_DEFDEV_IO=$(gcloud auth print-access-token)
 
     tofu init
     tofu plan
@@ -43,7 +43,7 @@ The variable name is derived from the registry hostname: replace dots with under
 === "Azure AKS"
 
     ```bash
-    export TF_TOKEN_KERRAREG_DEFDEV_IO=$(az account get-access-token \
+    export TF_TOKEN_OPENDEPOT_DEFDEV_IO=$(az account get-access-token \
       --resource 6dae42f8-4368-4678-94ff-3960e28e3630 \
       --query accessToken -o tsv)
 
@@ -55,7 +55,7 @@ The variable name is derived from the registry hostname: replace dots with under
 
     ```bash
     # Any cluster using kubelogin or exec credentials
-    export TF_TOKEN_KERRAREG_DEFDEV_IO=$(kubectl get secret \
+    export TF_TOKEN_OPENDEPOT_DEFDEV_IO=$(kubectl get secret \
       -n opendepot-system my-sa-token \
       -o jsonpath='{.data.token}' | base64 -d)
 
@@ -134,7 +134,7 @@ jobs:
       - name: Set registry token
         run: |
           TOKEN=$(aws eks get-token --cluster-name my-cluster --region us-west-2 --output json | jq -r '.status.token')
-          echo "TF_TOKEN_KERRAREG_DEFDEV_IO=$TOKEN" >> $GITHUB_ENV
+          echo "TF_TOKEN_OPENDEPOT_DEFDEV_IO=$TOKEN" >> $GITHUB_ENV
 
       - run: tofu init
       - run: tofu plan

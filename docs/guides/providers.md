@@ -52,7 +52,7 @@ host "opendepot.defdev.io" {
 Or using the environment variable approach:
 
 ```bash
-export TF_TOKEN_KERRAREG_DEFDEV_IO=$(aws eks get-token \
+export TF_TOKEN_OPENDEPOT_DEFDEV_IO=$(aws eks get-token \
   --cluster-name my-cluster \
   --region us-west-2 \
   --output json | jq -r '.status.token')

@@ -68,7 +68,8 @@ Each e2e suite is fully self-contained — it builds images, loads them into a K
 kind create cluster --name kind
 ```
 
-> **Note:** If you already have a `kind` cluster from a previous run it can be reused. The suites use `helm upgrade --install` so they are safe to run repeatedly.
+> [!TIP] 
+> If you already have a `kind` cluster from a previous run it can be reused. The suites use `helm upgrade --install` so they are safe to run repeatedly.
 
 ---
 
@@ -104,7 +105,8 @@ The provider suite builds the provider controller, version controller, and serve
 - `tofu init` against the local registry
 - Kubernetes RBAC enforcement (anonymous auth on/off, bearer-token auth)
 
-> **Note:** Provider binaries can be several hundred MB. The artifact download step has a 5-minute timeout. Ensure you have sufficient disk space and a stable internet connection.
+> [!IMPORTANT]
+> Provider binaries can be several hundred MB. The artifact download step has a 5-minute timeout. Ensure you have sufficient disk space and a stable internet connection.
 
 The suite generates a temporary GPG key pair automatically — no manual key setup is required.
 
@@ -142,7 +144,8 @@ cd services/version
 go test ./test/e2e/ -v -count=1 -timeout 20m
 ```
 
-> **Note:** Unlike the other suites, no `IMG=` prefix is needed. The `BeforeSuite` builds all three images internally using the default tag `version-controller:e2e-test`. The suite relies on the module controller to create the Version CR — standalone Version CRs are not tested directly because the version controller requires a `moduleConfigRef.name` pointing to an existing Module CR.
+> [!IMPORTANT]
+> Unlike the other suites, no `IMG=` prefix is needed. The `BeforeSuite` builds all three images internally using the default tag `version-controller:e2e-test`. The suite relies on the module controller to create the Version CR — standalone Version CRs are not tested directly because the version controller requires a `moduleConfigRef.name` pointing to an existing Module CR.
 
 ---
 

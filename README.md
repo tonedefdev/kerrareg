@@ -3,7 +3,7 @@
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/tonedefdev/opendepot/blob/main/LICENSE)
 [![Helm](https://img.shields.io/badge/Helm_Chart-0.1.0-0F1689?logo=helm&logoColor=white)](https://github.com/tonedefdev/opendepot/tree/main/chart/opendepot)
-[![Docs](https://img.shields.io/badge/Docs-tonedefdev.github.io-047df1?logo=materialformkdocs&logoColor=white)](https://tonedefdev.github.io/opendepot/docs)
+[![Docs](https://img.shields.io/badge/Docs-tonedefdev.github.io-047df1?logo=materialformkdocs&logoColor=white)](https://tonedefdev.github.io/opendepot/)
 
 <p align="center">
   <img src="img/opendepot.svg" width="400" />

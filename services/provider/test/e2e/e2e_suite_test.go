@@ -125,9 +125,9 @@ var _ = BeforeSuite(func() {
 	By("creating GPG secret in cluster")
 	cmd = exec.Command("kubectl", "create", "secret", "generic", gpgSecretName,
 		"--namespace", namespace,
-		fmt.Sprintf("--from-literal=KERRAREG_PROVIDER_GPG_KEY_ID=%s", keyID),
-		fmt.Sprintf("--from-literal=KERRAREG_PROVIDER_GPG_ASCII_ARMOR=%s", asciiArmor),
-		fmt.Sprintf("--from-literal=KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64=%s", privateKeyBase64),
+		fmt.Sprintf("--from-literal=OPENDEPOT_PROVIDER_GPG_KEY_ID=%s", keyID),
+		fmt.Sprintf("--from-literal=OPENDEPOT_PROVIDER_GPG_ASCII_ARMOR=%s", asciiArmor),
+		fmt.Sprintf("--from-literal=OPENDEPOT_PROVIDER_GPG_PRIVATE_KEY_BASE64=%s", privateKeyBase64),
 	)
 	_, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to create GPG secret")
