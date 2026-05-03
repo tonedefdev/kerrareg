@@ -239,6 +239,29 @@ func GetGithubApplicationSecret(ctx context.Context, k8sClient client.Client, se
 	return githubClientConfig, nil
 }
 
+// GetProviderGoMod fetches the go.mod file for a provider version from its GitHub source repository
+// using the provided GitHub client (authenticated or unauthenticated). Both 'v{version}' and bare
+// '{version}' ref formats are tried, matching the retry pattern used by GetModuleArchiveFromRef.
+func GetProviderGoMod(ctx context.Context, githubClient *github.Client, owner, repo, version string) ([]byte, error) {
+	bare := strings.TrimPrefix(version, "v")
+	for _, ref := range []string{"v" + bare, bare} {
+		fileContent, _, _, err := githubClient.Repositories.GetContents(ctx, owner, repo, "go.mod",
+			&github.RepositoryContentGetOptions{Ref: ref})
+		if err != nil {
+			continue
+		}
+		if fileContent == nil {
+			continue
+		}
+		data, err := fileContent.GetContent()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode go.mod content for %s/%s@%s: %w", owner, repo, ref, err)
+		}
+		return []byte(data), nil
+	}
+	return nil, fmt.Errorf("go.mod not found in %s/%s at version %s", owner, repo, version)
+}
+
 // RoundTrip sets the authorization header and executes a single HTTP transaction, returning a Response for the provided Request.
 func (t *jwtTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", t.JWT))

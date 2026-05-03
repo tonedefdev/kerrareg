@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -49,14 +48,19 @@ import (
 
 const (
 	opendepotControllerName = "opendepot-versions-controller"
-	hashicorpReleasesAPI    = "https://api.releases.hashicorp.com"
 )
 
 // VersionReconciler reconciles a Version object.
 type VersionReconciler struct {
 	client.Client
-	Log    logr.Logger
-	Scheme *runtime.Scheme
+	Log             logr.Logger
+	Scheme          *runtime.Scheme
+	ScanningEnabled bool
+	ScanModules     bool
+	TrivyCacheDir   string
+	ScanOffline     bool
+	BlockOnCritical bool
+	BlockOnHigh     bool
 }
 
 // +kubebuilder:rbac:groups=opendepot.defdev.io,resources=versions,verbs=get;list;watch;create;update;patch;delete
@@ -147,6 +151,7 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			version.Status.Checksum != nil &&
 			archiveChecksum != nil &&
 			*version.Status.Checksum != *archiveChecksum {
+
 			statusMsg := fmt.Errorf("version is marked immutable: archive checksum doesn't match existing checksum: got '%s'", *archiveChecksum)
 			version.Status.SyncStatus = statusMsg.Error()
 			version.Status.Synced = false
@@ -237,6 +242,36 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
+	// Run Trivy security scan for provider artifacts when scanning is enabled.
+	// The binary scan result is returned here and written in the final status
+	// update below so that all required fields (checksum, synced, syncStatus)
+	// are set atomically and satisfy CRD required-field validation.
+	var binaryScan *opendepotv1alpha1.ProviderBinaryScan
+	if r.ScanningEnabled && version.Spec.Type == opendepotv1alpha1.OpenDepotProvider && len(fileBytes) > 0 {
+		var scanErr error
+		binaryScan, scanErr = r.runProviderScan(ctx, version, fileBytes, r.TrivyCacheDir, r.ScanOffline, r.BlockOnCritical, r.BlockOnHigh)
+		if scanErr != nil {
+			version.Status.Synced = false
+			version.Status.SyncStatus = fmt.Sprintf("Scan policy violation: %v", scanErr)
+			_ = r.Status().Update(ctx, version)
+			return ctrl.Result{}, scanErr
+		}
+	}
+
+	// Run Trivy IaC scan for module archives when scanning and module scanning are enabled.
+	// The scan result is returned here and written atomically in the final status update below.
+	var moduleScan *opendepotv1alpha1.ModuleSourceScan
+	if r.ScanningEnabled && r.ScanModules && version.Spec.Type == opendepotv1alpha1.OpenDepotModule && len(fileBytes) > 0 {
+		var scanErr error
+		moduleScan, scanErr = r.runModuleScan(ctx, version, fileBytes, r.TrivyCacheDir, r.ScanOffline, r.BlockOnCritical, r.BlockOnHigh)
+		if scanErr != nil {
+			version.Status.Synced = false
+			version.Status.SyncStatus = fmt.Sprintf("Scan policy violation: %v", scanErr)
+			_ = r.Status().Update(ctx, version)
+			return ctrl.Result{}, scanErr
+		}
+	}
+
 	if err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		currentVersion := &opendepotv1alpha1.Version{}
 		if err := r.Get(ctx, req.NamespacedName, currentVersion); err != nil {
@@ -247,13 +282,22 @@ func (r *VersionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if archiveChecksum != nil {
 			currentVersion.Status.Checksum = archiveChecksum
 		}
+
 		currentVersion.Status.SyncStatus = "Successfully synced version"
+		if binaryScan != nil {
+			currentVersion.Status.BinaryScan = binaryScan
+		}
+
+		if moduleScan != nil {
+			currentVersion.Status.SourceScan = moduleScan
+		}
 
 		if err := r.Status().Update(ctx, currentVersion, &client.SubResourceUpdateOptions{
 			UpdateOptions: client.UpdateOptions{FieldManager: opendepotControllerName},
 		}); err != nil {
 			return err
 		}
+
 		return nil
 	}); err != nil {
 		return ctrl.Result{}, err
@@ -371,19 +415,6 @@ func (r *VersionReconciler) fetchModuleArchive(ctx context.Context, version *ope
 	return opendepotGithub.GetModuleArchiveFromRef(ctx, r.Log, githubClient, version, fileFormat)
 }
 
-// hashicorpReleaseBuild represents a single build artifact in a HashiCorp release.
-type hashicorpReleaseBuild struct {
-	Arch string `json:"arch"`
-	OS   string `json:"os"`
-	URL  string `json:"url"`
-}
-
-// hashicorpReleaseResponse is the subset of HashiCorp release metadata used by this controller.
-type hashicorpReleaseResponse struct {
-	Builds  []hashicorpReleaseBuild `json:"builds"`
-	Version string                  `json:"version"`
-}
-
 // generateProviderFileName returns a randomly generated UUID7 filename, preserving the original file extension.
 func generateProviderFileName(originalFileName string) (*string, error) {
 	id, err := uuid.NewV7()
@@ -396,7 +427,7 @@ func generateProviderFileName(originalFileName string) (*string, error) {
 	return &name, nil
 }
 
-// fetchProviderArchive resolves a provider build from HashiCorp releases API and downloads the artifact.
+// fetchProviderArchive resolves a provider binary download from the OpenTofu registry and downloads the artifact.
 func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *opendepotv1alpha1.Version) ([]byte, *string, *string, error) {
 	if version.Spec.ProviderConfigRef == nil || version.Spec.ProviderConfigRef.Name == nil {
 		return nil, nil, nil, fmt.Errorf("providerConfigRef.name is required")
@@ -412,104 +443,46 @@ func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *o
 		return nil, nil, nil, fmt.Errorf("provider version is empty")
 	}
 
-	release, productName, err := r.getHashiCorpRelease(ctx, providerName, providerVersion)
+	providerNamespace := "hashicorp"
+	if version.Spec.ProviderConfigRef.Namespace != nil {
+		if ns := strings.TrimSpace(*version.Spec.ProviderConfigRef.Namespace); ns != "" {
+			providerNamespace = ns
+		}
+	}
+
+	download, err := lookupProviderDownload(ctx, providerNamespace, providerName, providerVersion,
+		version.Spec.OperatingSystem, version.Spec.Architecture)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	build, err := getMatchingBuild(release.Builds, version.Spec.OperatingSystem, version.Spec.Architecture)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("product '%s': %w", productName, err)
-	}
-
-	archiveURL, err := url.Parse(build.URL)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("invalid provider build URL '%s': %w", build.URL, err)
-	}
-
-	fileName := path.Base(archiveURL.Path)
-	if fileName == "." || fileName == "/" || fileName == "" {
-		return nil, nil, nil, fmt.Errorf("unable to determine filename from provider build URL '%s'", build.URL)
-	}
-
-	fileBytes, err := httpGetBytes(ctx, build.URL)
+	fileBytes, err := httpGetBytes(ctx, download.DownloadURL)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	checksumRaw := sha256.Sum256(fileBytes)
+
+	// Validate the downloaded archive against the registry-provided SHA256.
+	if download.Shasum != "" {
+		if got := fmt.Sprintf("%x", checksumRaw); got != strings.ToLower(download.Shasum) {
+			return nil, nil, nil, fmt.Errorf("checksum mismatch for provider archive %s: registry expected %s, got %s",
+				download.Filename, download.Shasum, got)
+		}
+	}
+
 	checksum := base64.StdEncoding.EncodeToString(checksumRaw[:])
 
+	fileName := download.Filename
+	if fileName == "" {
+		fileName = path.Base(download.DownloadURL)
+	}
+
+	if fileName == "." || fileName == "/" || fileName == "" {
+		return nil, nil, nil, fmt.Errorf("unable to determine filename from provider download URL '%s'", download.DownloadURL)
+	}
+
 	return fileBytes, &checksum, &fileName, nil
-}
-
-// getHashiCorpRelease retrieves release metadata for a provider version using supported product name candidates.
-func (r *VersionReconciler) getHashiCorpRelease(ctx context.Context, providerName, providerVersion string) (*hashicorpReleaseResponse, string, error) {
-	products := getProviderProductCandidates(providerName)
-	var lastErr error
-
-	for _, productName := range products {
-		releaseURL := fmt.Sprintf("%s/v1/releases/%s/%s", hashicorpReleasesAPI, productName, providerVersion)
-		release := &hashicorpReleaseResponse{}
-		if err := httpGetJSON(ctx, releaseURL, release); err != nil {
-			lastErr = err
-			continue
-		}
-		return release, productName, nil
-	}
-
-	if lastErr != nil {
-		return nil, "", fmt.Errorf("failed to retrieve provider release metadata from %s for candidates %v: %w", hashicorpReleasesAPI, products, lastErr)
-	}
-
-	return nil, "", fmt.Errorf("provider release metadata not found for candidates %v", products)
-}
-
-// getProviderProductCandidates returns ordered HashiCorp product name candidates for a provider.
-func getProviderProductCandidates(providerName string) []string {
-	trimmed := strings.TrimSpace(providerName)
-	if trimmed == "" {
-		return nil
-	}
-
-	unique := map[string]struct{}{}
-	products := make([]string, 0, 2)
-
-	add := func(value string) {
-		if value == "" {
-			return
-		}
-
-		if _, exists := unique[value]; exists {
-			return
-		}
-
-		unique[value] = struct{}{}
-		products = append(products, value)
-	}
-
-	add(trimmed)
-	add(fmt.Sprintf("terraform-provider-%s", trimmed))
-
-	return products
-}
-
-// getMatchingBuild selects the build matching the requested operating system and architecture.
-func getMatchingBuild(builds []hashicorpReleaseBuild, operatingSystem, architecture string) (*hashicorpReleaseBuild, error) {
-	osTarget := strings.ToLower(strings.TrimSpace(operatingSystem))
-	archTarget := strings.ToLower(strings.TrimSpace(architecture))
-
-	for i := range builds {
-		build := &builds[i]
-		if strings.EqualFold(build.OS, osTarget) && strings.EqualFold(build.Arch, archTarget) {
-			if strings.TrimSpace(build.URL) == "" {
-				return nil, fmt.Errorf("provider build URL is empty for os=%s arch=%s", operatingSystem, architecture)
-			}
-			return build, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no provider build found for os=%s arch=%s", operatingSystem, architecture)
 }
 
 // httpGetJSON performs an HTTP GET and unmarshals the response payload into out.

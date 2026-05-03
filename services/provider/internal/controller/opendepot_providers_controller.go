@@ -217,7 +217,8 @@ func (r *ProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&opendepotv1alpha1.Provider{}).
+		For(&opendepotv1alpha1.Provider{},
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&opendepotv1alpha1.Version{}, builder.WithPredicates(versionPredicates)).
 		Named(opendepotControllerName).
 		Complete(r)

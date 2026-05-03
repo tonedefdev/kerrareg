@@ -1,0 +1,19 @@
+{{- if .Values.scanning.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: opendepot-trivy-cache
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/name: opendepot
+    app.kubernetes.io/component: scanning
+spec:
+  accessModes:
+  - {{ .Values.scanning.cache.accessMode }}
+  {{- if .Values.scanning.cache.storageClassName }}
+  storageClassName: {{ .Values.scanning.cache.storageClassName }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.scanning.cache.size }}
+{{- end }}

@@ -183,10 +183,27 @@ type ProviderConfig struct {
 	// The name of the provider. If omitted, the name of the Provider resource
 	// is used in its place.
 	Name *string `json:"name,omitempty"`
+	// The namespace (organization) of the provider in the OpenTofu registry,
+	// e.g. 'hashicorp', 'integrations', 'DataDog'. Defaults to 'hashicorp' when omitted,
+	// preserving backwards compatibility for existing Provider resources.
+	Namespace *string `json:"namespace,omitempty"`
 	// The OS(s) that the provider supports. This is used to set the 'os' constraint in the provider's versions.
 	OperatingSystems []string `json:"operatingSystems,omitempty"`
 	// The architecture(s) that the provider supports. This is used to set the 'arch' constraint in the provider's versions.
 	Architectures []string `json:"architectures,omitempty"`
+	// The Github client configuration settings for source scanning. When set with
+	// useAuthenticatedClient: true, the version controller will use a GitHub App to
+	// authenticate requests when fetching the provider's go.mod for source scanning.
+	// This is recommended for private source repositories and to avoid GitHub API rate limiting.
+	// The namespace where the Version resource exists must contain a Secret named
+	// 'opendepot-github-application-secret' with githubAppID, githubInstallID, and
+	// githubPrivateKey fields (private key must be base64 encoded).
+	GithubClientConfig *GithubClientConfig `json:"githubClientConfig,omitempty"`
+	// The URL of the provider's source repository on GitHub, e.g. 'https://github.com/hashicorp/terraform-provider-aws'.
+	// When omitted, OpenDepot looks up the repository from the OpenTofu registry (api.opentofu.org).
+	// If the registry lookup fails, it falls back to 'github.com/{namespace}/terraform-provider-{name}'.
+	// If the repository cannot be resolved, scanning falls back to binary-only mode.
+	SourceRepository *string `json:"sourceRepository,omitempty"`
 	// The external storage configuration settings.
 	StorageConfig *StorageConfig `json:"storageConfig,omitempty"`
 	// The version history limit for the provider.
@@ -224,6 +241,53 @@ type ProviderSpec struct {
 	Versions []ProviderVersion `json:"versions"`
 }
 
+// SecurityFinding represents a single vulnerability finding from a Trivy scan.
+type SecurityFinding struct {
+	// The CVE or GHSA identifier for the vulnerability.
+	VulnerabilityID string `json:"vulnerabilityID"`
+	// The name of the package containing the vulnerability.
+	PkgName string `json:"pkgName"`
+	// The version of the package currently in use.
+	InstalledVersion string `json:"installedVersion"`
+	// The minimum version of the package that resolves the vulnerability, if known.
+	FixedVersion string `json:"fixedVersion,omitempty"`
+	// The severity of the vulnerability: CRITICAL, HIGH, MEDIUM, LOW, or UNKNOWN.
+	Severity string `json:"severity"`
+	// A short description of the vulnerability.
+	Title string `json:"title,omitempty"`
+}
+
+// ModuleSourceScan holds the results of a Trivy IaC (filesystem) scan for a specific module version archive.
+// Scan results are stored on VersionStatus because each module version contains distinct HCL source.
+type ModuleSourceScan struct {
+	// The RFC3339 timestamp at which the source scan completed.
+	ScannedAt string `json:"scannedAt"`
+	// The list of IaC findings found in the module's HCL source.
+	Findings []SecurityFinding `json:"findings,omitempty"`
+}
+
+// ProviderSourceScan holds the results of a Trivy source scan (go.mod) for a specific provider version.
+// Source scan results are stored on ProviderStatus rather than VersionStatus because all OS/arch
+// variants of the same provider version share identical source code — scanning once is sufficient.
+type ProviderSourceScan struct {
+	// The RFC3339 timestamp at which the source scan completed.
+	ScannedAt string `json:"scannedAt"`
+	// The provider version that was scanned. Used for deduplication across OS/arch Version resources.
+	Version string `json:"version"`
+	// The list of vulnerabilities found in the provider's source dependencies (go.mod).
+	Findings []SecurityFinding `json:"findings,omitempty"`
+}
+
+// ProviderBinaryScan holds the results of a Trivy binary scan (gobinary) for a specific provider artifact.
+// Binary scan results are stored on VersionStatus because each OS/arch binary may embed different
+// Go stdlib versions or runtime dependencies.
+type ProviderBinaryScan struct {
+	// The RFC3339 timestamp at which the binary scan completed.
+	ScannedAt string `json:"scannedAt"`
+	// The list of vulnerabilities found in the compiled provider binary.
+	Findings []SecurityFinding `json:"findings,omitempty"`
+}
+
 // ProviderStatus defines the observed state of a provider.
 type ProviderStatus struct {
 	// The latest available version of the provider
@@ -236,6 +300,10 @@ type ProviderStatus struct {
 	SyncStatus string `json:"syncStatus"`
 	// A slice of the ProviderVersionRefs that have been successfully created by the controller
 	ProviderVersionRefs map[string]*ProviderVersion `json:"providerVersionRefs,omitempty"`
+	// The most recent source vulnerability scan result for this provider.
+	// Populated by the Version controller after scanning the provider's source code (go.mod).
+	// Deduplicated across all OS/arch Version resources for the same provider version.
+	SourceScan *ProviderSourceScan `json:"sourceScan,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -307,6 +375,12 @@ type VersionStatus struct {
 	Synced bool `json:"synced"`
 	// The Version's reconciliation status.
 	SyncStatus string `json:"syncStatus"`
+	// The binary vulnerability scan result for this specific provider artifact.
+	// Only populated for provider Version resources when scanning is enabled.
+	BinaryScan *ProviderBinaryScan `json:"binaryScan,omitempty"`
+	// The IaC source scan result for this specific module version archive.
+	// Only populated for module Version resources when scanning is enabled.
+	SourceScan *ModuleSourceScan `json:"sourceScan,omitempty"`
 }
 
 // +kubebuilder:object:root=true

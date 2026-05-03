@@ -338,6 +338,135 @@ Initializing provider plugins...
 OpenTofu has been successfully initialized!
 ```
 
+## Step 9: (Optional) Test Trivy Scanning
+
+This step shows Trivy scanning in action against the module from Step 4 and, if you completed Step 8, the provider as well.
+
+**Step 9a: Enable scanning**
+
+Kind uses a single-node cluster, so `ReadWriteOnce` access mode and the default storage class are sufficient. Set `offline=false` so Trivy downloads the vulnerability database directly rather than waiting for the CronJob to complete on a fresh cluster:
+
+```bash
+helm upgrade opendepot opendepot/opendepot \
+  -n opendepot-system \
+  --reuse-values \
+  --set scanning.enabled=true \
+  --set scanning.offline=false \
+  --set scanning.cache.accessMode=ReadWriteOnce \
+  --wait
+```
+
+!!! note
+    `scanning.offline=false` is a convenience for local development. In production, leave `offline=true` (the default) and rely on the `trivy-db-updater` CronJob to keep the database current.
+
+**Step 9b: Populate the Trivy database**
+
+Manually trigger the `trivy-db-updater` CronJob so the database is ready before scans run:
+
+```bash
+kubectl create job trivy-db-init \
+  --from=cronjob/trivy-db-updater \
+  -n opendepot-system
+
+kubectl wait --for=condition=complete \
+  job/trivy-db-init \
+  -n opendepot-system \
+  --timeout=120s
+```
+
+**Step 9c: Trigger a module scan**
+
+Force-resync the module from Step 4 to trigger an IaC scan:
+
+```bash
+kubectl patch module terraform-aws-key-pair -n opendepot-system \
+  --type merge -p '{"spec":{"forceSync":true}}'
+```
+
+Watch the Version resource reconcile, then inspect the IaC findings:
+
+```bash
+kubectl get versions -n opendepot-system -w
+# wait for SYNCED=true, then Ctrl-C
+
+kubectl get version terraform-aws-key-pair-2.0.0 \
+  -n opendepot-system \
+  -o jsonpath='{.status.sourceScan}' | jq .
+```
+
+You should see something like:
+
+```json
+{
+  "scannedAt": "2026-05-03T02:11:00Z",
+  "findings": [
+    {
+      "vulnerabilityID": "AVD-AWS-0057",
+      "pkgName": "aws_key_pair",
+      "installedVersion": "",
+      "severity": "LOW",
+      "title": "Key pair does not use a modern key algorithm"
+    }
+  ]
+}
+```
+
+Module IaC findings contain Trivy rule IDs (e.g. `AVD-AWS-0057`) rather than CVE identifiers. An empty `findings` array means no misconfigurations were detected.
+
+**Step 9d: (Requires Step 8) Inspect provider scan results**
+
+If you completed Step 8, the provider binary and source scans run automatically. Force-resync the provider to ensure scan results are populated:
+
+```bash
+kubectl patch provider aws -n opendepot-system \
+  --type merge -p '{"spec":{"forceSync":true}}'
+
+kubectl get versions -n opendepot-system -w
+# wait for aws Version to show SYNCED=true, then Ctrl-C
+```
+
+Check the binary scan on the Version resource (per OS/arch):
+
+```bash
+kubectl get version aws-5.80.0-linux-amd64 \
+  -n opendepot-system \
+  -o jsonpath='{.status.binaryScan}' | jq .
+```
+
+```json
+{
+  "scannedAt": "2026-05-03T02:12:00Z",
+  "findings": [
+    {
+      "vulnerabilityID": "CVE-2024-24790",
+      "pkgName": "stdlib",
+      "installedVersion": "1.22.3",
+      "fixedVersion": "1.22.4",
+      "severity": "CRITICAL",
+      "title": "net/netip: Unexpected behavior from Is methods for IPv4-mapped IPv6 addresses"
+    }
+  ]
+}
+```
+
+Check the source scan on the Provider resource (shared across all OS/arch variants):
+
+```bash
+kubectl get provider aws \
+  -n opendepot-system \
+  -o jsonpath='{.status.sourceScan}' | jq .
+```
+
+```json
+{
+  "scannedAt": "2026-05-03T02:12:05Z",
+  "version": "5.80.0",
+  "findings": []
+}
+```
+
+Provider binary findings contain CVE identifiers and package version details. The source scan covers `go.mod` dependencies — an empty `findings` array means no vulnerable dependencies were detected.
+
 ## Cleanup
 
 ```bash

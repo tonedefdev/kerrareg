@@ -153,3 +153,66 @@ GET /opendepot/providers/v1/{namespace}/{type}/{version}/SHA256SUMS.sig/{os}/{ar
 
 Returns the detached GPG signature over the `SHA256SUMS` file, signed with the key configured in `server.gpg.secretName`. Does **not** require client authentication.
 
+## Kubernetes Resource Types
+
+### SecurityFinding
+
+Represents a single vulnerability finding from a Trivy scan.
+
+| Field | Type | Description |
+|---|---|---|
+| `vulnerabilityID` | `string` | CVE or GHSA identifier for the vulnerability |
+| `pkgName` | `string` | Name of the package containing the vulnerability |
+| `installedVersion` | `string` | Version of the package currently in use |
+| `fixedVersion` | `string` | Minimum version that resolves the vulnerability, if known |
+| `severity` | `string` | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, or `UNKNOWN` |
+| `title` | `string` | Short description of the vulnerability |
+
+### ProviderBinaryScan
+
+Holds Trivy binary scan (`trivy rootfs`) results for a specific provider artifact. Stored in `Version.status.binaryScan`. Each OS/architecture binary is scanned independently because Go stdlib versions and runtime dependencies may differ between compiled artifacts.
+
+| Field | Type | Description |
+|---|---|---|
+| `scannedAt` | `string` | RFC3339 timestamp at which the binary scan completed |
+| `findings` | `[]SecurityFinding` | Vulnerabilities found in the compiled provider binary |
+
+### ProviderSourceScan
+
+Holds Trivy source scan (`trivy fs`) results for a provider's `go.mod` dependencies. Stored in `Provider.status.sourceScan`. Deduplicated across OS/architecture `Version` resources because all variants share the same source code.
+
+| Field | Type | Description |
+|---|---|---|
+| `scannedAt` | `string` | RFC3339 timestamp at which the source scan completed |
+| `version` | `string` | Provider version that was scanned (used for deduplication) |
+| `findings` | `[]SecurityFinding` | Vulnerabilities found in the provider's source dependencies (go.mod) |
+
+### ProviderConfig fields
+
+| Field | Type | Description |
+|---|---|---|
+| `namespace` | `string` | The organisation namespace in the OpenTofu registry (e.g. `hashicorp`, `integrations`, `DataDog`). Defaults to `hashicorp`. Used for binary download and source repository lookup. Existing `Provider` resources without this field continue to work unchanged. |
+| `sourceRepository` | `string` | Full GitHub URL of the provider's source repository (e.g. `https://github.com/hashicorp/terraform-provider-aws`). When omitted, OpenDepot queries the OpenTofu registry (`api.opentofu.org`) for the repository URL, falling back to `https://github.com/{namespace}/terraform-provider-{name}` if the registry lookup fails. Set this field to override an incorrect or unavailable registry result. |
+
+### VersionStatus fields
+
+| Field | Type | Description |
+|---|---|---|
+| `binaryScan` | `ProviderBinaryScan` | Binary vulnerability scan result for this specific provider artifact. Populated only for provider `Version` resources when scanning is enabled. |
+| `sourceScan` | `ModuleSourceScan` | IaC scan result for this module archive. Populated only for module `Version` resources when scanning is enabled. |
+
+### ProviderStatus fields
+
+| Field | Type | Description |
+|---|---|---|
+| `sourceScan` | `ProviderSourceScan` | Most recent source vulnerability scan result. Populated by the Version controller after scanning the provider's `go.mod`. Deduplicated across all OS/architecture `Version` resources for the same provider version. |
+
+### ModuleSourceScan
+
+Holds Trivy IaC scan (`trivy fs`) results for a module archive. Stored in `Version.status.sourceScan`. Findings represent HCL misconfigurations detected by Trivy's config-class rules.
+
+| Field | Type | Description |
+|---|---|---|
+| `scannedAt` | `string` | RFC3339 timestamp at which the IaC scan completed |
+| `findings` | `[]SecurityFinding` | Misconfigurations found in the module's HCL source. `vulnerabilityID` contains a Trivy rule ID (e.g. `AVD-AWS-0057`) rather than a CVE. |
+

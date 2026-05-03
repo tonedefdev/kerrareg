@@ -1,0 +1,49 @@
+{{- if .Values.scanning.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: trivy-db-updater
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app.kubernetes.io/name: opendepot
+    app.kubernetes.io/component: scanning
+spec:
+  schedule: {{ .Values.scanning.dbUpdater.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: opendepot
+            app.kubernetes.io/component: trivy-db-updater
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+          containers:
+          - name: trivy-db-updater
+            image: "{{ .Values.scanning.dbUpdater.image.repository }}:{{ .Values.scanning.dbUpdater.image.tag }}"
+            imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+            args:
+            - image
+            - --download-db-only
+            - --cache-dir
+            - {{ .Values.scanning.cacheMountPath }}
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop:
+                - ALL
+            volumeMounts:
+            - name: trivy-cache
+              mountPath: {{ .Values.scanning.cacheMountPath }}
+          volumes:
+          - name: trivy-cache
+            persistentVolumeClaim:
+              claimName: opendepot-trivy-cache
+{{- end }}
