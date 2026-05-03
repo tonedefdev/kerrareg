@@ -128,9 +128,9 @@ The server signs `SHA256SUMS` files for provider packages using a GPG key you su
 
 | Secret Key | Description |
 |-----------|-------------|
-| `KERRAREG_PROVIDER_GPG_KEY_ID` | Short or long hex key ID of the signing key |
-| `KERRAREG_PROVIDER_GPG_ASCII_ARMOR` | ASCII-armored public key block (included in the API response so OpenTofu can verify) |
-| `KERRAREG_PROVIDER_GPG_PRIVATE_KEY_BASE64` | Base64-encoded ASCII-armored private key (used by the server to sign `SHA256SUMS`) |
+| `OPENDEPOT_PROVIDER_GPG_KEY_ID` | Short or long hex key ID of the signing key |
+| `OPENDEPOT_PROVIDER_GPG_ASCII_ARMOR` | ASCII-armored public key block (included in the API response so OpenTofu can verify) |
+| `OPENDEPOT_PROVIDER_GPG_PRIVATE_KEY_BASE64` | Base64-encoded ASCII-armored private key (used by the server to sign `SHA256SUMS`) |
 
 | Value | Default | Description |
 |-------|---------|-------------|
