@@ -1,0 +1,23 @@
+apiVersion: v1
+entries:
+  opendepot:
+  - apiVersion: v2
+    appVersion: 0.2.0
+    created: "2026-05-03T05:11:11.027380302Z"
+    description: A Helm chart for deploying OpenDepot, a cloud-native OpenTofu Registry
+    digest: 0711dcc02b8b0c855d6a0e695a6d9f41144f50bbe8e03ecdf1a693c5589af2db
+    keywords:
+    - terraform
+    - opentofu
+    - module-registry
+    - provider-registry
+    - kubernetes
+    maintainers:
+    - email: tony.owens@defdev.io
+      name: Tony Owens
+    name: opendepot
+    type: application
+    urls:
+    - https://github.com/tonedefdev/opendepot/releases/download/opendepot-0.2.0/opendepot-0.2.0.tgz
+    version: 0.2.0
+generated: "2026-05-03T05:11:11.027387435Z"
