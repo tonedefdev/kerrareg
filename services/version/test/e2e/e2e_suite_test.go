@@ -39,9 +39,6 @@ var (
 		return "version-controller:e2e-test"
 	}()
 
-	// moduleImage is the module controller image to deploy for e2e tests.
-	moduleImage = "module-controller:e2e-test"
-
 	// serverImage is the server image to deploy for e2e tests.
 	serverImage = "server:e2e-test"
 )
@@ -71,15 +68,6 @@ var _ = BeforeSuite(func() {
 	_, err = utils.RunAt(buildCmd, repoRoot)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the version controller image")
 
-	By("building the module controller image")
-	moduleBuildCmd := exec.Command("docker", "build",
-		"-t", moduleImage,
-		"-f", "services/module/Dockerfile",
-		".",
-	)
-	_, err = utils.RunAt(moduleBuildCmd, repoRoot)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the module controller image")
-
 	By("building the server image")
 	serverBuildCmd := exec.Command("docker", "build",
 		"-t", serverImage,
@@ -92,10 +80,6 @@ var _ = BeforeSuite(func() {
 	By("loading the version controller image on Kind")
 	err = utils.LoadImageToKindClusterWithName(projectImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the version controller image into Kind")
-
-	By("loading the module controller image on Kind")
-	err = utils.LoadImageToKindClusterWithName(moduleImage)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the module controller image into Kind")
 
 	By("loading the server image on Kind")
 	err = utils.LoadImageToKindClusterWithName(serverImage)
@@ -116,7 +100,6 @@ var _ = BeforeSuite(func() {
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
 	versionRepo, versionTag := splitImageRef(projectImage)
-	moduleRepo, moduleTag := splitImageRef(moduleImage)
 	serverRepo, serverTag := splitImageRef(serverImage)
 
 	cmd = exec.Command("helm", "upgrade", helmReleaseName, chartPath,
@@ -127,9 +110,7 @@ var _ = BeforeSuite(func() {
 		"--set", "global.image.tag=",
 		"--set", "depot.enabled=false",
 		"--set", "provider.enabled=false",
-		"--set", "module.enabled=true",
-		"--set", fmt.Sprintf("module.image.repository=%s", moduleRepo),
-		"--set", fmt.Sprintf("module.image.tag=%s", moduleTag),
+		"--set", "module.enabled=false",
 		"--set", fmt.Sprintf("version.image.repository=%s", versionRepo),
 		"--set", fmt.Sprintf("version.image.tag=%s", versionTag),
 		"--set", "server.anonymousAuth=true",
