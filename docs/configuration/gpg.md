@@ -46,7 +46,7 @@ kubectl create secret generic opendepot-provider-gpg \
 **Referencing the Secret in Helm**
 
 ```bash
-helm upgrade opendepot chart/opendepot \
+helm upgrade opendepot opendepot/opendepot \
   -n opendepot-system \
   --reuse-values \
   --set server.gpg.secretName=opendepot-provider-gpg \

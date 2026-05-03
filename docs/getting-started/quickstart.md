@@ -28,14 +28,12 @@ The fastest way to try OpenDepot is with a local [kind](https://kind.sigs.k8s.io
 kind create cluster --name opendepot
 ```
 
-## Step 2: Install CRDs and Deploy with Helm
-
-Install the CRDs, then deploy OpenDepot with filesystem storage, `hostPath` volume, and anonymous auth:
+## Step 2: Deploy with Helm
 
 ```bash
-kubectl apply --server-side -f chart/opendepot/crds/
-
-helm upgrade --install opendepot chart/opendepot \
+helm repo add opendepot https://tonedefdev.github.io/opendepot
+helm repo update
+helm install opendepot opendepot/opendepot \
   -n opendepot-system --create-namespace \
   --set storage.filesystem.enabled=true \
   --set storage.filesystem.hostPath=/data/modules \
@@ -150,7 +148,7 @@ OpenTofu has been successfully initialized!
 To test OpenDepot's Kubernetes-native auth, redeploy with `anonymousAuth` disabled:
 
 ```bash
-helm upgrade opendepot chart/opendepot \
+helm upgrade opendepot opendepot/opendepot \
   -n opendepot-system \
   --reuse-values \
   --set server.anonymousAuth=false \
@@ -262,7 +260,7 @@ kubectl create secret generic opendepot-provider-gpg \
 **Step 8b: Redeploy OpenDepot with the provider controller and GPG secret**
 
 ```bash
-helm upgrade opendepot chart/opendepot \
+helm upgrade opendepot opendepot/opendepot \
   -n opendepot-system \
   --reuse-values \
   --set provider.enabled=true \

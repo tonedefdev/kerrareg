@@ -145,7 +145,7 @@ Stores module archives on a shared volume mounted to both the Version controller
 **Local Development with kind (hostPath):**
 
 ```bash
-helm upgrade --install opendepot chart/opendepot \
+helm install opendepot opendepot/opendepot \
   -n opendepot-system \
   --create-namespace \
   --set storage.filesystem.enabled=true \
@@ -157,7 +157,7 @@ When using `hostPath`, the chart adds an `initContainer` that runs as root to se
 **Production with PVC (ReadWriteMany):**
 
 ```bash
-helm upgrade --install opendepot chart/opendepot \
+helm install opendepot opendepot/opendepot \
   -n opendepot-system \
   --create-namespace \
   --set storage.filesystem.enabled=true \

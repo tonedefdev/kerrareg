@@ -17,29 +17,29 @@ search:
 - A supported storage backend (S3 bucket, Azure Storage Account, or local filesystem)
 - *(Optional)* A GitHub App for authenticated API access
 
-## Install CRDs
-
-CRDs must be installed before deploying the Helm chart:
-
-```bash
-kubectl apply -f chart/opendepot/crds/
-```
-
 ## Install with Helm
 
 !!! tip "Minimal install"
     For a quick start, the one-liner below is all you need. OpenDepot will use in-cluster defaults. Customise with `--set` flags or a values file once you're ready.
 
 ```bash
-helm upgrade --install opendepot chart/opendepot \
+helm repo add opendepot https://tonedefdev.github.io/opendepot
+helm repo update
+helm install opendepot opendepot/opendepot \
   -n opendepot-system \
   --create-namespace
 ```
 
+!!! warning "Upgrading an existing installation"
+    Helm does not update CRDs during `helm upgrade`. If you are upgrading from a previous version, apply the latest CRDs manually first:
+    ```bash
+    helm show crds opendepot/opendepot | kubectl apply --server-side -f -
+    ```
+
 To customize values:
 
 ```bash
-helm upgrade --install opendepot chart/opendepot \
+helm install opendepot opendepot/opendepot \
   -n opendepot-system \
   --create-namespace \
   --set global.image.tag=v0.1.0 \
@@ -50,7 +50,7 @@ helm upgrade --install opendepot chart/opendepot \
 Or use a values file:
 
 ```bash
-helm upgrade --install opendepot chart/opendepot \
+helm install opendepot opendepot/opendepot \
   -n opendepot-system \
   --create-namespace \
   -f my-values.yaml
