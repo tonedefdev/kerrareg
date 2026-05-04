@@ -353,28 +353,14 @@ helm upgrade opendepot opendepot/opendepot \
   --set scanning.enabled=true \
   --set scanning.offline=false \
   --set scanning.cache.accessMode=ReadWriteOnce \
+  --set scanning.scanModules=true \
   --wait
 ```
 
 !!! note
     `scanning.offline=false` is a convenience for local development. In production, leave `offline=true` (the default) and rely on the `trivy-db-updater` CronJob to keep the database current.
 
-**Step 9b: Populate the Trivy database**
-
-Manually trigger the `trivy-db-updater` CronJob so the database is ready before scans run:
-
-```bash
-kubectl create job trivy-db-init \
-  --from=cronjob/trivy-db-updater \
-  -n opendepot-system
-
-kubectl wait --for=condition=complete \
-  job/trivy-db-init \
-  -n opendepot-system \
-  --timeout=120s
-```
-
-**Step 9c: Trigger a module scan**
+**Step 9b: Trigger a module scan**
 
 Force-resync the module from Step 4 to trigger an IaC scan:
 
@@ -401,7 +387,7 @@ You should see something like:
   "scannedAt": "2026-05-03T02:11:00Z",
   "findings": [
     {
-      "vulnerabilityID": "AVD-AWS-0057",
+      "vulnerabilityID": "AWS-0057",
       "pkgName": "aws_key_pair",
       "installedVersion": "",
       "severity": "LOW",
@@ -411,19 +397,11 @@ You should see something like:
 }
 ```
 
-Module IaC findings contain Trivy rule IDs (e.g. `AVD-AWS-0057`) rather than CVE identifiers. An empty `findings` array means no misconfigurations were detected.
+Module IaC findings contain Trivy rule IDs rather than CVE identifiers. An empty `findings` array means no misconfigurations were detected.
 
-**Step 9d: (Requires Step 8) Inspect provider scan results**
+**Step 9c: (Requires Step 8) Inspect provider scan results by**
 
-If you completed Step 8, the provider binary and source scans run automatically. Force-resync the provider to ensure scan results are populated:
-
-```bash
-kubectl patch provider aws -n opendepot-system \
-  --type merge -p '{"spec":{"forceSync":true}}'
-
-kubectl get versions -n opendepot-system -w
-# wait for aws Version to show SYNCED=true, then Ctrl-C
-```
+If you completed Step 8, the provider binary and source scans run automatically.
 
 Check the binary scan on the Version resource (per OS/arch):
 
