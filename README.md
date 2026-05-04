@@ -15,16 +15,16 @@ Compatible with **OpenTofu** (all versions) and **Terraform** (v1.2+).
 
 ## Documentation
 
-Comprehensive documentation is available at **[tonedefdev.github.io/opendepot/docs](https://tonedefdev.github.io/opendepot/docs)**.
+Comprehensive documentation is available at **[tonedefdev.github.io/opendepot/](https://tonedefdev.github.io/opendepot/)**.
 
 | Guide | Description |
 |-------|-------------|
-| [Installation](https://tonedefdev.github.io/opendepot/docs/getting-started/installation/) | Deploy OpenDepot to Kubernetes using the Helm chart |
-| [Quickstart](https://tonedefdev.github.io/opendepot/docs/getting-started/quickstart/) | Get up and running locally in minutes |
-| [Helm Chart Reference](https://tonedefdev.github.io/opendepot/docs/helm-chart/) | Full values reference for the OpenDepot Helm chart |
-| [Architecture](https://tonedefdev.github.io/opendepot/docs/architecture/) | How OpenDepot works under the hood |
-| [Authentication](https://tonedefdev.github.io/opendepot/docs/authentication/) | GitHub App and token-based auth |
-| [Kubernetes RBAC](https://tonedefdev.github.io/opendepot/docs/rbac/) | Fine-grained access control for registry resources |
+| [Installation](https://tonedefdev.github.io/opendepot/getting-started/installation/) | Deploy OpenDepot to Kubernetes using the Helm chart |
+| [Quickstart](https://tonedefdev.github.io/opendepot/getting-started/quickstart/) | Get up and running locally in minutes |
+| [Helm Chart Reference](https://tonedefdev.github.io/opendepot/helm-chart/) | Full values reference for the OpenDepot Helm chart |
+| [Architecture](https://tonedefdev.github.io/opendepot/architecture/) | How OpenDepot works under the hood |
+| [Authentication](https://tonedefdev.github.io/opendepot/authentication/) | GitHub App and token-based auth |
+| [Kubernetes RBAC](https://tonedefdev.github.io/opendepot/rbac/) | Fine-grained access control for registry resources |
 
 
 ## Version Constraints
