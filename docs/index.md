@@ -82,7 +82,7 @@ OpenDepot delegates auth entirely to Kubernetes — the platform you're likely a
 graph TD
     CLI["OpenTofu / Terraform CLI"]
 
-    Server["**Server** — Registry Protocol API\nService Discovery · List Versions\nDownload Redirect · GPG-signed SHA256SUMS"]
+    Server["Server — Registry Protocol API\nService Discovery · List Versions\nDownload Redirect · GPG-signed SHA256SUMS"]
 
     Depot["Depot\nController"]
     Module["Module\nController"]
