@@ -98,7 +98,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 2rem;
-  padding: 4rem 0 3rem;
+  padding: 1rem 0 3rem;
   flex-wrap: wrap;
 }
 
@@ -134,17 +134,13 @@
 
 .mdx-hero__image {
   flex: 0 0 600px;
+  padding-bottom: 12rem;
   text-align: center;
 }
 
 .mdx-hero__image img {
   max-width: 600px;
   width: 100%;
-  filter: drop-shadow(0 8px 24px rgba(4, 125, 241, 0.18));
-}
-
-[data-md-color-scheme="slate"] .mdx-hero__image img {
-  filter: drop-shadow(0 8px 24px rgba(3, 222, 184, 0.18));
 }
 
 /* Hero stats pills */
@@ -341,10 +337,14 @@
    Responsive — hero stacks on small screens
    --------------------------------------------------------------------------- */
 @media screen and (max-width: 76.1875em) {
+  .mdx-container {
+    padding-top: 0;
+  }
   .mdx-hero {
     flex-direction: column-reverse;
     text-align: center;
-    padding: 2.5rem 0 2rem;
+    padding: 0;
+    gap: 0;
   }
   .mdx-hero__content {
     max-width: 100%;
@@ -358,10 +358,11 @@
   .mdx-hero__image {
     flex: 0 0 auto;
     width: 100%;
+    padding-bottom: 0;
   }
   .mdx-hero__image img {
     max-width: 480px;
-    width: 80%;
+    width: 90%;
     margin: 0 auto;
     display: block;
   }
