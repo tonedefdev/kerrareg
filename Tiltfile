@@ -245,6 +245,14 @@ local_resource(
     labels=['controls'],
 )
 local_resource(
+    'provider-mirror-tls',
+    serve_cmd='tilt/scripts/provider-mirror-proxy.sh',
+    resource_deps=['ui'],
+    auto_init=False,
+    links=[link('https://opendepot.localtest.me:8443', 'Provider Mirror TLS Proxy')],
+    labels=['controls'],
+)
+local_resource(
     'reset-cluster',
     cmd='tilt/scripts/reset-cluster.sh',
     auto_init=False,

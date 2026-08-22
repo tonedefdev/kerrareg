@@ -298,6 +298,13 @@ Once `SYNCED` shows `true`, the provider binary is stored in the local filesyste
 
 **Step 8d: Use the provider registry with OpenTofu or Terraform**
 
+The Provider Network Mirror Protocol requires HTTPS. In another terminal, start the local trusted TLS proxy before running either CLI:
+
+```bash
+mkcert -install
+tilt/scripts/provider-mirror-proxy.sh
+```
+
 ```bash
 mkdir /tmp/opendepot-provider-test && cd /tmp/opendepot-provider-test
 
@@ -315,7 +322,7 @@ EOF
 cat > .tofurc <<'EOF'
 provider_installation {
   network_mirror {
-    url     = "http://opendepot.localtest.me:8080/opendepot/providers/mirror/v1/opendepot-system/"
+    url     = "https://opendepot.localtest.me:8443/opendepot/providers/mirror/v1/opendepot-system/"
     include = ["registry.opentofu.org/*/*"]
   }
 

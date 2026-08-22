@@ -2,11 +2,20 @@
 set -eu
 
 namespace=opendepot-system
+anonymous_auth=${OPENDEPOT_DEV_ANONYMOUS_AUTH:-false}
 
 if [ -z "${OPENDEPOT_DEV_PASSWORD:-}" ]; then
   echo "OPENDEPOT_DEV_PASSWORD is required for the local Dex user" >&2
   exit 1
 fi
+
+case "$anonymous_auth" in
+  true|false) ;;
+  *)
+    echo "OPENDEPOT_DEV_ANONYMOUS_AUTH must be true or false" >&2
+    exit 1
+    ;;
+esac
 
 if command -v htpasswd >/dev/null 2>&1; then
   password_hash=$(htpasswd -bnBC 10 "" "$OPENDEPOT_DEV_PASSWORD" | tr -d ':\n')
@@ -56,6 +65,9 @@ fi
 
 mkdir -p tilt/.generated
 cat > tilt/.generated/values.yaml <<EOF
+server:
+  anonymousAuth: $anonymous_auth
+
 dex:
   config:
     staticPasswords:
