@@ -1,7 +1,7 @@
 ---
 description: "Use when: implementing a feature, writing Go code, updating Kubernetes controllers, adding CRD fields, writing or fixing e2e tests, debugging test failures, updating the Helm chart, or executing any code changes in the OpenDepot project. Requires a plan in session memory from the planner agent or a clear description from the user."
 name: "OpenDepot Developer"
-model: "Claude Sonnet 5 (copilot)"
+model: "GPT-5.6 Sol"
 tools: [read, edit, search, execute, agent, todo, vscode/memory, browser]
 agents: ["OpenDepot Code Review", "OpenDepot Security Review", "OpenDepot Documentation"]
 argument-hint: "Feature to implement (ideally after running the planner agent)"
