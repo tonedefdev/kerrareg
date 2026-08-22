@@ -10,8 +10,8 @@ export function buildProviderSource(registryHost: string, namespace: string, nam
   return `${registryHost}/${namespace}/${name}`;
 }
 
-export function buildCanonicalProviderSource(namespace: string, name: string): string {
-  return `${namespace || "hashicorp"}/${name}`;
+export function buildCanonicalProviderSource(upstreamRegistry: string, namespace: string, name: string): string {
+  return `${upstreamRegistry || "registry.opentofu.org"}/${namespace || "hashicorp"}/${name}`;
 }
 
 export function buildProviderMirrorUrl(baseUrl: string, namespace: string): string {

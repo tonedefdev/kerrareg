@@ -255,7 +255,8 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 				ns = strings.TrimSpace(*providerConfig.Namespace)
 			}
 
-			allVersions, err := registry.ListProviderVersions(ctx, ns, providerName)
+			upstreamRegistry := opendepotv1alpha1.ProviderUpstreamRegistry(&providerConfig)
+			allVersions, err := registry.ListProviderVersions(ctx, upstreamRegistry, ns, providerName)
 			if err != nil {
 				return ctrl.Result{}, err
 			}

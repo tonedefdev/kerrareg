@@ -13,7 +13,6 @@ COPY pkg/github/go.mod pkg/github/go.sum pkg/github/
 COPY pkg/utils/go.mod pkg/utils/
 COPY pkg/testutils/go.mod pkg/testutils/
 COPY pkg/registry/go.mod pkg/registry/
-COPY pkg/hclschema/go.mod pkg/hclschema/go.sum pkg/hclschema/
 COPY services/server/go.mod services/server/go.sum services/server/
 COPY services/depot/go.mod services/depot/go.sum services/depot/
 COPY services/module/go.mod services/module/go.sum services/module/
@@ -32,7 +31,6 @@ COPY pkg/storage/ pkg/storage/
 COPY pkg/github/ pkg/github/
 COPY pkg/utils/ pkg/utils/
 COPY pkg/registry/ pkg/registry/
-COPY pkg/hclschema/ pkg/hclschema/
 COPY services/server/ services/server/
 
 # Build

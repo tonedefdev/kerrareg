@@ -59,14 +59,26 @@ type providerMirrorArchive struct {
 	Hashes []string `json:"hashes"`
 }
 
+func terraformCommand(args ...string) *exec.Cmd {
+	terraformPath, err := exec.LookPath("terraform")
+	if err == nil {
+		return exec.Command(terraformPath, args...)
+	}
+
+	opArgs := append([]string{"plugin", "run", "--", "terraform"}, args...)
+
+	return exec.Command("op", opArgs...)
+}
+
 var _ = Describe("Provider", Ordered, func() {
 	const (
-		providerNamespace     = "opendepot-system"
-		serverPortForwardPort = "18080"
-		providerCRName        = "null"
-		providerVersion       = "3.2.3"
-		providerVersionCRName = "null-3-2-3-linux-amd64"
-		providerStoragePath   = "/data/modules"
+		providerNamespace          = "opendepot-system"
+		terraformProviderNamespace = "opendepot-terraform-e2e"
+		serverPortForwardPort      = "18080"
+		providerCRName             = "null"
+		providerVersion            = "3.2.3"
+		providerVersionCRName      = "null-3-2-3-linux-amd64"
+		providerStoragePath        = "/data/modules"
 	)
 
 	var (
@@ -112,6 +124,37 @@ spec:
 		cmd := exec.Command("kubectl", "apply", "-f", providerFile)
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to apply test Provider CR")
+
+		By("creating the Terraform provider test namespace")
+		_, _ = utils.Run(exec.Command("kubectl", "delete", "namespace", terraformProviderNamespace, "--ignore-not-found", "--wait=true"))
+		_, err = utils.Run(exec.Command("kubectl", "create", "namespace", terraformProviderNamespace))
+		Expect(err).NotTo(HaveOccurred(), "Failed to create Terraform provider test namespace")
+
+		terraformProviderYAML := fmt.Sprintf(`
+apiVersion: opendepot.defdev.io/v1alpha1
+kind: Provider
+metadata:
+  name: "%s"
+  namespace: %s
+spec:
+  providerConfig:
+    name: "%s"
+    upstreamRegistry: registry.terraform.io
+    operatingSystems:
+%s
+    architectures:
+%s
+    storageConfig:
+      fileSystem:
+        directoryPath: %s
+  versions:
+    - version: "%s"
+`, providerCRName, terraformProviderNamespace, providerCRName, operatingSystems, architectures, providerStoragePath, providerVersion)
+
+		terraformProviderFile := filepath.Join(GinkgoT().TempDir(), "terraform-provider.yaml")
+		Expect(os.WriteFile(terraformProviderFile, []byte(terraformProviderYAML), 0600)).To(Succeed())
+		_, err = utils.Run(exec.Command("kubectl", "apply", "-f", terraformProviderFile))
+		Expect(err).NotTo(HaveOccurred(), "Failed to apply Terraform Provider CR")
 
 		By("starting port-forward to the opendepot server")
 		pfCtx, cancel := context.WithCancel(context.Background())
@@ -163,6 +206,7 @@ spec:
 			"-n", providerNamespace, "--ignore-not-found",
 		)
 		_, _ = utils.Run(cmd)
+		_, _ = utils.Run(exec.Command("kubectl", "delete", "namespace", terraformProviderNamespace, "--ignore-not-found"))
 	})
 
 	It("should create Version CRs for the provider", func() {
@@ -412,6 +456,111 @@ spec:
 		lockFile, err := os.ReadFile(filepath.Join(workDir, ".terraform.lock.hcl"))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(lockFile)).To(ContainSubstring(`provider "registry.opentofu.org/hashicorp/null"`))
+	})
+
+	It("should install a Terraform provider identity through the network mirror", func() {
+		currentVersionCRName := fmt.Sprintf("null-3-2-3-%s-%s", runtime.GOOS, runtime.GOARCH)
+		By("waiting for the Terraform host platform provider artifact")
+		Eventually(func(g Gomega) {
+			output, err := utils.Run(exec.Command("kubectl", "get", "version", currentVersionCRName,
+				"-n", terraformProviderNamespace,
+				"-o", `jsonpath={.status.synced},{.status.checksum}`,
+			))
+			g.Expect(err).NotTo(HaveOccurred())
+			parts := strings.SplitN(output, ",", 2)
+			g.Expect(parts).To(HaveLen(2))
+			g.Expect(parts[0]).To(Equal("true"))
+			g.Expect(parts[1]).NotTo(BeEmpty())
+		}, 5*time.Minute, 5*time.Second).Should(Succeed())
+
+		mirrorBaseURL := fmt.Sprintf("%s/opendepot/providers/mirror/v1/%s/", mirrorTLSServer.URL, terraformProviderNamespace)
+		providerBaseURL := mirrorBaseURL + "registry.terraform.io/hashicorp/null/"
+
+		By("checking the Terraform network mirror version index")
+		response, err := mirrorTLSServer.Client().Get(providerBaseURL + "index.json")
+		Expect(err).NotTo(HaveOccurred())
+		defer response.Body.Close()
+		Expect(response.StatusCode).To(Equal(http.StatusOK))
+		var index providerMirrorVersionsResponse
+		Expect(json.NewDecoder(response.Body).Decode(&index)).To(Succeed())
+		Expect(index.Versions).To(HaveKey(providerVersion))
+
+		By("checking Terraform platform metadata and archive integrity")
+		metadataURL := providerBaseURL + providerVersion + ".json"
+		response, err = mirrorTLSServer.Client().Get(metadataURL)
+		Expect(err).NotTo(HaveOccurred())
+		defer response.Body.Close()
+		Expect(response.StatusCode).To(Equal(http.StatusOK))
+		var metadata providerMirrorArchivesResponse
+		Expect(json.NewDecoder(response.Body).Decode(&metadata)).To(Succeed())
+		platform := runtime.GOOS + "_" + runtime.GOARCH
+		archive, exists := metadata.Archives[platform]
+		Expect(exists).To(BeTrue())
+		Expect(archive.Hashes).To(HaveLen(1))
+		Expect(archive.Hashes[0]).To(HavePrefix("zh:"))
+
+		expectedChecksum, err := utils.Run(exec.Command("kubectl", "get", "version", currentVersionCRName,
+			"-n", terraformProviderNamespace,
+			"-o", `jsonpath={.status.checksum}`,
+		))
+		Expect(err).NotTo(HaveOccurred())
+		expectedChecksumBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(expectedChecksum))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(archive.Hashes[0]).To(Equal("zh:" + hex.EncodeToString(expectedChecksumBytes)))
+
+		metadataLocation, err := url.Parse(metadataURL)
+		Expect(err).NotTo(HaveOccurred())
+		archiveLocation, err := metadataLocation.Parse(archive.URL)
+		Expect(err).NotTo(HaveOccurred())
+		archiveResponse, err := mirrorTLSServer.Client().Get(archiveLocation.String())
+		Expect(err).NotTo(HaveOccurred())
+		defer archiveResponse.Body.Close()
+		Expect(archiveResponse.StatusCode).To(Equal(http.StatusOK))
+		archiveBytes, err := io.ReadAll(archiveResponse.Body)
+		Expect(err).NotTo(HaveOccurred())
+		digest := sha256.Sum256(archiveBytes)
+		Expect(base64.StdEncoding.EncodeToString(digest[:])).To(Equal(strings.TrimSpace(expectedChecksum)))
+
+		By("rejecting a mismatched OpenTofu origin")
+		wrongOriginURL := mirrorBaseURL + "registry.opentofu.org/hashicorp/null/index.json"
+		wrongOriginResponse, err := mirrorTLSServer.Client().Get(wrongOriginURL)
+		Expect(err).NotTo(HaveOccurred())
+		defer wrongOriginResponse.Body.Close()
+		Expect(wrongOriginResponse.StatusCode).To(Equal(http.StatusNotFound))
+
+		By("running terraform init with direct installation disabled")
+		workDir := GinkgoT().TempDir()
+		mainTF := fmt.Sprintf(`terraform {
+  required_providers {
+    null = {
+      source  = "registry.terraform.io/hashicorp/null"
+      version = "%s"
+    }
+  }
+}
+`, providerVersion)
+		Expect(os.WriteFile(filepath.Join(workDir, "main.tf"), []byte(mainTF), 0600)).To(Succeed())
+		terraformRC := fmt.Sprintf(`provider_installation {
+  network_mirror {
+    url     = "%s"
+    include = ["registry.terraform.io/hashicorp/null"]
+  }
+  direct {
+    exclude = ["registry.terraform.io/hashicorp/null"]
+  }
+}
+`, mirrorBaseURL)
+		terraformRCPath := filepath.Join(workDir, ".terraformrc")
+		Expect(os.WriteFile(terraformRCPath, []byte(terraformRC), 0600)).To(Succeed())
+		initCmd := terraformCommand("init", "-no-color")
+		initCmd.Dir = workDir
+		initCmd.Env = append(os.Environ(), "TF_CLI_CONFIG_FILE="+terraformRCPath)
+		output, err := initCmd.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), "network mirror terraform init failed; output:\n%s", string(output))
+		Expect(string(output)).To(ContainSubstring("successfully initialized"))
+		lockFile, err := os.ReadFile(filepath.Join(workDir, ".terraform.lock.hcl"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(lockFile)).To(ContainSubstring(`provider "registry.terraform.io/hashicorp/null"`))
 	})
 
 	It("should enforce Kubernetes RBAC when anonymousAuth is disabled", func() {

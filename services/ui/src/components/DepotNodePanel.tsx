@@ -24,6 +24,7 @@ interface DepotNodePanelProps {
     synced?: boolean;
     provider?: string;
     providerNamespace?: string;
+    upstreamRegistry?: string;
     storageBackend?: string;
     storageConfig?: BrowseStorageConfig;
     githubAuthenticated?: boolean;
@@ -252,6 +253,10 @@ export default function DepotNodePanel({ node, onClose }: DepotNodePanelProps) {
 
         {node.kind === "provider" && node.providerNamespace && (
           <FieldRow label="Provider Namespace" value={node.providerNamespace} />
+        )}
+
+        {node.kind === "provider" && node.upstreamRegistry && (
+          <FieldRow label="Upstream Registry" value={node.upstreamRegistry} />
         )}
 
         {node.kind === "version" && node.latestVersion && (

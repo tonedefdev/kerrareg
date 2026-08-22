@@ -316,9 +316,7 @@ See [GroupBinding Access Control](groupbinding.md) for full expression syntax, c
 
 Every module and provider detail page (`/<namespace>/<kind>/<name>`) shows a **Usage** card with ready-to-paste HCL blocks and copy-to-clipboard buttons.
 
-For a **provider**, the card shows two snippets:
-
-1. **OpenTofu CLI configuration** (`.tofurc`) with the `provider_installation.network_mirror` block:
+For a **provider**, the card shows CLI configuration snippets for both OpenTofu (`.tofurc`) and Terraform (`.terraformrc`) with the `provider_installation.network_mirror` block:
 
 ```hcl
 provider_installation {
@@ -333,7 +331,9 @@ provider_installation {
 }
 ```
 
-2. **Provider requirement** block with the canonical source identity:
+The `<canonicalSource>` placeholder is populated with the canonical upstream identity (`registry.opentofu.org/*/*` or `registry.terraform.io/*/*`) based on the Provider resource's `spec.providerConfig.upstreamRegistry` field.
+
+The card also shows a **Provider requirement** block with the canonical source identity:
 
 ```hcl
 terraform {
@@ -346,7 +346,7 @@ terraform {
 }
 ```
 
-The canonical source (e.g., `hashicorp/aws`) is preserved in your configuration and lockfile, while the mirror URL tells OpenTofu to install from OpenDepot. See [Consuming Providers](providers.md) for full details on the Network Mirror workflow.
+The canonical source (e.g., `hashicorp/aws`) is preserved in your configuration and lockfile, while the mirror URL tells the CLI to install from OpenDepot. See [Consuming Providers](providers.md) for full details on the Network Mirror workflow.
 
 For a **module**, the card shows a single `module` block:
 

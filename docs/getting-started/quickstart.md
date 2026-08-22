@@ -296,7 +296,7 @@ kubectl get versions -n opendepot-system -w
 
 Once `SYNCED` shows `true`, the provider binary is stored in the local filesystem.
 
-**Step 8d: Use the provider registry with OpenTofu**
+**Step 8d: Use the provider registry with OpenTofu or Terraform**
 
 ```bash
 mkdir /tmp/opendepot-provider-test && cd /tmp/opendepot-provider-test
@@ -328,16 +328,9 @@ EOF
 TF_CLI_CONFIG_FILE=.tofurc tofu init
 ```
 
-The `provider_installation` block tells OpenTofu to install providers from OpenDepot while preserving the canonical `hashicorp/aws` identity in your configuration and lockfile. The `direct.exclude` entry ensures installations always come from OpenDepot rather than falling back to `registry.opentofu.org`. OpenTofu will resolve `opendepot.localtest.me` to `127.0.0.1` and install the provider from your local OpenDepot instance:
+The `provider_installation` block tells OpenTofu to install providers from OpenDepot while preserving the canonical `hashicorp/aws` identity in your configuration and lockfile. The `direct.exclude` entry ensures installations always come from OpenDepot rather than falling back to `registry.opentofu.org`.
 
-```
-Initializing provider plugins...
-- Finding hashicorp/aws versions matching "5.80.0"...
-- Installing opendepot.localtest.me:8080/opendepot-system/aws v5.80.0...
-- Installed opendepot.localtest.me:8080/opendepot-system/aws v5.80.0
-
-OpenTofu has been successfully initialized!
-```
+To use Terraform instead, rename `.tofurc` to `.terraformrc` and run `TF_CLI_CONFIG_FILE=.terraformrc terraform init`. If your `Provider` resource uses `upstreamRegistry: registry.terraform.io`, update the `include` and `exclude` patterns to `registry.terraform.io/*/*`.
 
 **Step 8d (authenticated): Using the provider registry with bearer token auth**
 

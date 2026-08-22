@@ -124,6 +124,7 @@ type BrowseResource struct {
 	RepoURL  string `json:"repoUrl,omitempty"`
 	// Provider-specific fields.
 	ProviderNamespace string             `json:"providerNamespace,omitempty"`
+	UpstreamRegistry  string             `json:"upstreamRegistry,omitempty"`
 	Platforms         []ProviderPlatform `json:"platforms,omitempty"`
 	// Scan metadata.
 	ScanCounts  *BrowseScanCounts `json:"scanCounts,omitempty"`
@@ -292,6 +293,7 @@ type BrowseGraphProvider struct {
 	Namespace         string `json:"namespace"`
 	Name              string `json:"name"`
 	ProviderNamespace string `json:"providerNamespace,omitempty"`
+	UpstreamRegistry  string `json:"upstreamRegistry,omitempty"`
 	Synced            bool   `json:"synced"`
 }
 

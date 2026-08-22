@@ -771,7 +771,7 @@ func generateProviderFileName(originalFileName string) (*string, error) {
 	return &name, nil
 }
 
-// fetchProviderArchive resolves a provider binary download from the OpenTofu registry
+// fetchProviderArchive resolves a provider binary download from the configured upstream registry
 // and streams the artifact to a temporary file on disk to avoid buffering the
 // full provider zip (~700 MB) in the Go heap. The caller must invoke the returned
 // cleanup function (typically via defer) to remove the temp file.
@@ -798,12 +798,14 @@ func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *o
 		}
 	}
 
-	download, err := registry.LookupProviderDownload(ctx, providerNamespace, providerName, providerVersion,
+	upstreamRegistry := opendepotv1alpha1.ProviderUpstreamRegistry(version.Spec.ProviderConfigRef)
+	download, err := registry.LookupProviderDownload(ctx, upstreamRegistry, providerNamespace, providerName, providerVersion,
 		version.Spec.OperatingSystem, version.Spec.Architecture)
 	if err != nil {
 		return "", func() {}, nil, nil, err
 	}
-	r.Log.V(5).Info("provider download URL resolved; streaming archive", "version", version.Name, "url", download.DownloadURL, "filename", download.Filename)
+
+	r.Log.V(5).Info("provider download URL resolved; streaming archive", "version", version.Name, "upstreamRegistry", upstreamRegistry, "url", download.DownloadURL, "filename", download.Filename)
 
 	tmpPath, checksumHex, cleanupFn, err := httpStreamToFile(ctx, download.DownloadURL)
 	if err != nil {

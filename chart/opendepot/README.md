@@ -11,7 +11,7 @@ This chart deploys five OpenDepot services:
 | **Version Controller** | Enabled | Fetches module source from GitHub and stores it in the configured backend |
 | **Module Controller** | Enabled | Orchestrates `Version` resource creation and lifecycle |
 | **Depot Controller** | Enabled | Pulls modules from external sources based on version constraints |
-| **Provider Controller** | Disabled | Mirrors provider binaries from the HashiCorp Releases API |
+| **Provider Controller** | Disabled | Mirrors provider binaries from upstream provider registries (`registry.opentofu.org` or `registry.terraform.io`) |
 | **Server** | Enabled | Implements the Terraform Module Registry Protocol API |
 
 All images are pulled from `ghcr.io/tonedefdev/opendepot/` and default to the tag set in `global.image.tag`.
@@ -103,7 +103,7 @@ helm install opendepot ./chart/opendepot \
 
 ### Provider Controller
 
-The Provider controller is disabled by default. Enable it to mirror provider binaries from the HashiCorp Releases API into your registry.
+The Provider controller is disabled by default. Enable it to mirror provider binaries from upstream provider registries (`registry.opentofu.org` or `registry.terraform.io`) into your registry.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|

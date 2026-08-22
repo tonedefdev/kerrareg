@@ -66,9 +66,11 @@ interface ResourceReadmeProps {
   registryHost: string;
   /** Provider only — canonical upstream namespace (e.g. "hashicorp"). */
   providerNamespace?: string;
+  /** Provider only — canonical upstream registry hostname. */
+  upstreamRegistry?: string;
 }
 
-export default function ResourceReadme({ content, kind, namespace, name, provider, registryHost, providerNamespace = "hashicorp" }: ResourceReadmeProps) {
+export default function ResourceReadme({ content, kind, namespace, name, provider, registryHost, providerNamespace = "hashicorp", upstreamRegistry = "registry.opentofu.org" }: ResourceReadmeProps) {
   const { mode, systemMode } = useColorScheme();
   const resolvedMode = mode === "system" ? systemMode : mode;
   const codeBg = resolvedMode === "light" ? "#f0f7ff" : "#1e1e1e";
@@ -80,7 +82,7 @@ export default function ResourceReadme({ content, kind, namespace, name, provide
 
   const registrySource =
     kind === "provider"
-      ? buildCanonicalProviderSource(providerNamespace, name)
+      ? buildCanonicalProviderSource(upstreamRegistry, providerNamespace, name)
       : buildModuleSource(registryHost, namespace, name, provider);
   const rewrittenContent = React.useMemo(
     () => rewriteSource(content, registrySource),

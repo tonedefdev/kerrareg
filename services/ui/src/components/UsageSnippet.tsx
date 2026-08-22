@@ -29,6 +29,8 @@ interface UsageSnippetProps {
   registryBaseUrl: string;
   /** Provider only — canonical upstream namespace (e.g. "hashicorp"). */
   providerNamespace?: string;
+  /** Provider only — canonical upstream registry hostname. */
+  upstreamRegistry?: string;
 }
 
 // ── Snippet builders ──────────────────────────────────────────────────────────
@@ -38,12 +40,13 @@ function resolveVersion(latestVersion?: string, versionConstraints?: string): st
 }
 
 function buildProviderSnippet(
+	upstreamRegistry: string,
   providerNamespace: string,
   name: string,
   latestVersion?: string,
   versionConstraints?: string,
 ): string {
-  const source = buildCanonicalProviderSource(providerNamespace, name);
+  const source = buildCanonicalProviderSource(upstreamRegistry, providerNamespace, name);
   const version = resolveVersion(latestVersion, versionConstraints);
   const versionLine = version ? `\n      version = "${version}"` : "";
   return `terraform {
@@ -99,12 +102,13 @@ export default function UsageSnippet({
   registryHost,
   registryBaseUrl,
   providerNamespace = "hashicorp",
+	upstreamRegistry = "registry.opentofu.org",
 }: UsageSnippetProps) {
-  const providerSource = buildCanonicalProviderSource(providerNamespace, name);
+  const providerSource = buildCanonicalProviderSource(upstreamRegistry, providerNamespace, name);
   const snippets = kind === "provider"
     ? [
-        { label: "OpenTofu CLI configuration", code: buildProviderCLIConfig(registryBaseUrl, namespace, providerSource) },
-        { label: "Provider requirement", code: buildProviderSnippet(providerNamespace, name, latestVersion, versionConstraints) },
+        { label: "CLI configuration", code: buildProviderCLIConfig(registryBaseUrl, namespace, providerSource) },
+        { label: "Provider requirement", code: buildProviderSnippet(upstreamRegistry, providerNamespace, name, latestVersion, versionConstraints) },
       ]
     : [{ label: "Module requirement", code: buildModuleSnippet(registryHost, namespace, name, provider, latestVersion, versionConstraints) }];
 

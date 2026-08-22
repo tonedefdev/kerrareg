@@ -23,6 +23,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	opendepotv1alpha1 "github.com/tonedefdev/opendepot/api/v1alpha1"
 )
 
 const (
@@ -33,6 +35,17 @@ const (
 	// DefaultNamespace is the default provider namespace when none is specified.
 	DefaultNamespace = "hashicorp"
 )
+
+func providerRegistryAPI(upstreamRegistry string) (string, error) {
+	switch strings.TrimSpace(upstreamRegistry) {
+	case "", opendepotv1alpha1.OpenTofuRegistryHost:
+		return "https://" + opendepotv1alpha1.OpenTofuRegistryHost, nil
+	case opendepotv1alpha1.TerraformRegistryHost:
+		return "https://" + opendepotv1alpha1.TerraformRegistryHost, nil
+	default:
+		return "", fmt.Errorf("unsupported provider upstream registry %q", upstreamRegistry)
+	}
+}
 
 // ProviderVersionsResponse is the shape returned by the OpenTofu registry versions endpoint.
 type ProviderVersionsResponse struct {
@@ -56,15 +69,20 @@ type ProviderDocsResponse struct {
 	Link string `json:"link"`
 }
 
-// ListProviderVersions returns all version strings available for a provider from the OpenTofu registry.
+// ListProviderVersions returns all version strings available for a provider from the configured registry.
 // The caller is responsible for applying any version constraint filtering.
-func ListProviderVersions(ctx context.Context, namespace, name string) ([]string, error) {
+func ListProviderVersions(ctx context.Context, upstreamRegistry, namespace, name string) ([]string, error) {
 	if strings.TrimSpace(namespace) == "" {
 		namespace = DefaultNamespace
 	}
 
+	registryAPI, err := providerRegistryAPI(upstreamRegistry)
+	if err != nil {
+		return nil, err
+	}
+
 	endpoint := fmt.Sprintf("%s/v1/providers/%s/%s/versions",
-		OpenTofuRegistryAPI,
+		registryAPI,
 		strings.ToLower(strings.TrimSpace(namespace)),
 		strings.ToLower(strings.TrimSpace(name)),
 	)
@@ -85,10 +103,15 @@ func ListProviderVersions(ctx context.Context, namespace, name string) ([]string
 }
 
 // LookupProviderDownload returns download metadata for a specific provider version/os/arch
-// from the OpenTofu registry.
-func LookupProviderDownload(ctx context.Context, namespace, name, version, os, arch string) (*ProviderDownload, error) {
+// from the configured registry.
+func LookupProviderDownload(ctx context.Context, upstreamRegistry, namespace, name, version, os, arch string) (*ProviderDownload, error) {
+	registryAPI, err := providerRegistryAPI(upstreamRegistry)
+	if err != nil {
+		return nil, err
+	}
+
 	endpoint := fmt.Sprintf("%s/v1/providers/%s/%s/%s/download/%s/%s",
-		OpenTofuRegistryAPI,
+		registryAPI,
 		strings.ToLower(strings.TrimSpace(namespace)),
 		strings.ToLower(strings.TrimSpace(name)),
 		strings.TrimPrefix(strings.TrimSpace(version), "v"),

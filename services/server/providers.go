@@ -23,13 +23,12 @@ import (
 	opendepotUtils "github.com/tonedefdev/opendepot/pkg/utils"
 )
 
-const openTofuRegistryHost = "registry.opentofu.org"
-
-func providerConfigIdentity(providerConfig *opendepotv1alpha1.ProviderConfig, fallbackName string) (string, string) {
+func providerConfigIdentity(providerConfig *opendepotv1alpha1.ProviderConfig, fallbackName string) (string, string, string) {
+	upstreamRegistry := opendepotv1alpha1.ProviderUpstreamRegistry(providerConfig)
 	providerNamespace := "hashicorp"
 	providerName := fallbackName
 	if providerConfig == nil {
-		return providerNamespace, providerName
+		return upstreamRegistry, providerNamespace, providerName
 	}
 
 	if providerConfig.Namespace != nil && strings.TrimSpace(*providerConfig.Namespace) != "" {
@@ -40,10 +39,14 @@ func providerConfigIdentity(providerConfig *opendepotv1alpha1.ProviderConfig, fa
 		providerName = strings.TrimSpace(*providerConfig.Name)
 	}
 
-	return providerNamespace, providerName
+	return upstreamRegistry, providerNamespace, providerName
 }
 
-func getMirrorProvider(clientset *kubernetes.Clientset, namespace, providerNamespace, providerType string, r *http.Request) (*opendepotv1alpha1.Provider, error) {
+func supportedProviderRegistry(hostname string) bool {
+	return hostname == opendepotv1alpha1.OpenTofuRegistryHost || hostname == opendepotv1alpha1.TerraformRegistryHost
+}
+
+func getMirrorProvider(clientset *kubernetes.Clientset, namespace, upstreamRegistry, providerNamespace, providerType string, r *http.Request) (*opendepotv1alpha1.Provider, error) {
 	result, err := clientset.RESTClient().
 		Get().
 		AbsPath("/apis/opendepot.defdev.io/v1alpha1").
@@ -61,8 +64,8 @@ func getMirrorProvider(clientset *kubernetes.Clientset, namespace, providerNames
 
 	for index := range providerList.Items {
 		provider := &providerList.Items[index]
-		configuredNamespace, configuredName := providerConfigIdentity(&provider.Spec.ProviderConfig, provider.Name)
-		if configuredNamespace == providerNamespace && configuredName == providerType {
+		configuredRegistry, configuredNamespace, configuredName := providerConfigIdentity(&provider.Spec.ProviderConfig, provider.Name)
+		if configuredRegistry == upstreamRegistry && configuredNamespace == providerNamespace && configuredName == providerType {
 			return provider, nil
 		}
 	}
@@ -70,7 +73,7 @@ func getMirrorProvider(clientset *kubernetes.Clientset, namespace, providerNames
 	return nil, nil
 }
 
-func listMirrorProviderVersions(clientset *kubernetes.Clientset, namespace, providerNamespace, providerType string, r *http.Request) ([]opendepotv1alpha1.Version, error) {
+func listMirrorProviderVersions(clientset *kubernetes.Clientset, namespace, upstreamRegistry, providerNamespace, providerType string, r *http.Request) ([]opendepotv1alpha1.Version, error) {
 	result, err := clientset.RESTClient().
 		Get().
 		AbsPath("/apis/opendepot.defdev.io/v1alpha1").
@@ -89,8 +92,8 @@ func listMirrorProviderVersions(clientset *kubernetes.Clientset, namespace, prov
 	versions := make([]opendepotv1alpha1.Version, 0)
 	for index := range versionList.Items {
 		version := versionList.Items[index]
-		configuredNamespace, configuredName := providerConfigIdentity(version.Spec.ProviderConfigRef, "")
-		if configuredNamespace != providerNamespace || configuredName != providerType {
+		configuredRegistry, configuredNamespace, configuredName := providerConfigIdentity(version.Spec.ProviderConfigRef, "")
+		if configuredRegistry != upstreamRegistry || configuredNamespace != providerNamespace || configuredName != providerType {
 			continue
 		}
 
@@ -162,15 +165,16 @@ func authorizeMirrorProvider(w http.ResponseWriter, r *http.Request) (*kubernete
 	}
 
 	namespace := chi.URLParam(r, "namespace")
+	upstreamRegistry := chi.URLParam(r, "hostname")
 	providerNamespace := chi.URLParam(r, "providerNamespace")
 	providerType := chi.URLParam(r, "type")
-	if chi.URLParam(r, "hostname") != openTofuRegistryHost {
+	if !supportedProviderRegistry(upstreamRegistry) {
 		http.Error(w, "provider not found", http.StatusNotFound)
 
 		return nil, nil, false
 	}
 
-	provider, err := getMirrorProvider(clientset, namespace, providerNamespace, providerType, r)
+	provider, err := getMirrorProvider(clientset, namespace, upstreamRegistry, providerNamespace, providerType, r)
 	if err != nil {
 		logger.Error("unable to locate provider for network mirror", "error", err, "namespace", namespace, "providerNamespace", providerNamespace, "type", providerType)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -202,7 +206,7 @@ func getProviderMirrorVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	versions, err := listMirrorProviderVersions(clientset, chi.URLParam(r, "namespace"), chi.URLParam(r, "providerNamespace"), chi.URLParam(r, "type"), r)
+	versions, err := listMirrorProviderVersions(clientset, chi.URLParam(r, "namespace"), chi.URLParam(r, "hostname"), chi.URLParam(r, "providerNamespace"), chi.URLParam(r, "type"), r)
 	if err != nil {
 		logger.Error("unable to list provider versions for network mirror", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -236,7 +240,7 @@ func getProviderMirrorArchives(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	versions, err := listMirrorProviderVersions(clientset, chi.URLParam(r, "namespace"), chi.URLParam(r, "providerNamespace"), chi.URLParam(r, "type"), r)
+	versions, err := listMirrorProviderVersions(clientset, chi.URLParam(r, "namespace"), chi.URLParam(r, "hostname"), chi.URLParam(r, "providerNamespace"), chi.URLParam(r, "type"), r)
 	if err != nil {
 		logger.Error("unable to list provider archives for network mirror", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -256,7 +260,8 @@ func getProviderMirrorArchives(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveProviderMirrorArchive(w http.ResponseWriter, r *http.Request) {
-	if chi.URLParam(r, "hostname") != openTofuRegistryHost {
+	upstreamRegistry := chi.URLParam(r, "hostname")
+	if !supportedProviderRegistry(upstreamRegistry) {
 		http.Error(w, "provider package not found", http.StatusNotFound)
 
 		return
@@ -273,7 +278,7 @@ func serveProviderMirrorArchive(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	providerNamespace := chi.URLParam(r, "providerNamespace")
 	providerType := chi.URLParam(r, "type")
-	versions, err := listMirrorProviderVersions(clientset, namespace, providerNamespace, providerType, r)
+	versions, err := listMirrorProviderVersions(clientset, namespace, upstreamRegistry, providerNamespace, providerType, r)
 	if err != nil {
 		logger.Error("unable to list provider archives for network mirror download", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)

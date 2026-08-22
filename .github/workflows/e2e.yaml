@@ -206,6 +206,12 @@ jobs:
         with:
           tofu_version: "1.6.0"
 
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+          terraform_wrapper: false
+
       - name: Install local TLS certificate authority
         run: |
           sudo apt-get update

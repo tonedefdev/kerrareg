@@ -19,9 +19,9 @@ The Depot is well-suited to three scenarios:
 
 ## Syncing upstream providers
 
-When you self-host a registry, you take ownership of provider distribution. The Depot mirrors providers from the HashiCorp Releases API so your teams never pull directly from an external source — and every version that enters your registry is scanned by Trivy before it becomes available.
+When you self-host a registry, you take ownership of provider distribution. The Depot mirrors providers from the upstream registries so your teams never pull directly from an external source — and every version that enters your registry is scanned by Trivy before it becomes available.
 
-Providers mirrored by OpenDepot retain their **canonical identity** (e.g., `registry.opentofu.org/hashicorp/aws`). Your OpenTofu configurations reference the canonical source, and you configure OpenDepot as the installation source via the Network Mirror Protocol. See [Consuming Providers](../guides/providers.md) for full `.tofurc` configuration examples.
+Providers mirrored by OpenDepot retain their **canonical identity** (e.g., `registry.opentofu.org/hashicorp/aws` or `registry.terraform.io/hashicorp/aws`). Your configurations reference the canonical source, and you configure OpenDepot as the installation source via the Network Mirror Protocol. The upstream registry is controlled per `Provider` resource via `spec.providerConfig.upstreamRegistry` (defaults to `registry.opentofu.org`). See [Consuming Providers](../guides/providers.md) for full CLI configuration examples.
 
 ```yaml
 apiVersion: opendepot.defdev.io/v1alpha1
@@ -60,7 +60,21 @@ spec:
   pollingIntervalMinutes: 1440
 ```
 
-This Depot queries the HashiCorp Releases API for each provider, filters releases to those matching the version constraint, and creates `Provider` and `Version` resources for each matching OS/architecture combination. The Version controller downloads each binary, uploads it to S3, and — when [scanning is enabled](../configuration/scanning.md) — runs both a binary scan (`trivy rootfs`) and a source scan (`trivy fs` against the provider's `go.mod`) before marking the version as synced.
+This Depot queries the upstream provider registry API for each provider (defaults to `registry.opentofu.org` when `upstreamRegistry` is omitted), filters releases to those matching the version constraint, and creates `Provider` and `Version` resources for each matching OS/architecture combination. The Version controller downloads each binary, uploads it to S3, and — when [scanning is enabled](../configuration/scanning.md) — runs both a binary scan (`trivy rootfs`) and a source scan (`trivy fs` against the provider's `go.mod`) before marking the version as synced.
+
+To mirror from `registry.terraform.io` instead, set the `upstreamRegistry` field explicitly:
+
+```yaml
+providerConfigs:
+  - name: aws
+    upstreamRegistry: registry.terraform.io
+    operatingSystems:
+      - linux
+    architectures:
+      - amd64
+      - arm64
+    versionConstraints: ">= 5.80.0"
+```
 
 Setting `pollingIntervalMinutes: 1440` re-checks for new releases once per day. When a new upstream version matches your constraint, the Depot creates the corresponding resources automatically and the scanning and storage pipeline runs without any manual steps.
 

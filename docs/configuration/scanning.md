@@ -143,8 +143,8 @@ scanning:
 When performing a source scan, the Version controller resolves the provider's GitHub repository using the following chain:
 
 1. **Explicit override** — if `spec.providerConfig.sourceRepository` is set, it is used directly and no lookup is performed.
-2. **OpenTofu registry lookup** — queries `api.opentofu.org/registry/docs/providers/{namespace}/{name}` to retrieve the provider's registered VCS URL. This works for any provider published in the OpenTofu registry, regardless of the owning organization.
-3. **Heuristic fallback** — constructs `https://github.com/{namespace}/terraform-provider-{name}` from the configured namespace and provider name.
+2. **OpenTofu registry lookup** — for providers with `upstreamRegistry: registry.opentofu.org`, queries `api.opentofu.org` for the registered VCS URL.
+3. **Heuristic fallback** — for Terraform Registry providers, or when the OpenTofu lookup fails, constructs `https://github.com/{namespace}/terraform-provider-{name}` from the configured namespace and name.
 
 If all three steps fail to produce a usable URL, the Version controller logs a warning and skips the source scan. The binary scan still runs.
 
@@ -157,7 +157,7 @@ kubectl get provider <name> -n <namespace> \
 
 **`namespace` field**
 
-The `namespace` field on `ProviderConfig` controls which organisation is used in the registry lookup (step 2) and the heuristic fallback (step 3). It defaults to `hashicorp`, so existing `Provider` resources continue to work without any changes.
+The `namespace` field on `ProviderConfig` controls which organisation is used in the OpenTofu lookup and the heuristic fallback. It defaults to `hashicorp`.
 
 Set `namespace` when using a provider that is not published under the `hashicorp` organization:
 
@@ -170,7 +170,7 @@ spec:
 
 **`sourceRepository` override**
 
-Use `sourceRepository` to pin a specific GitHub URL when the OpenTofu registry returns the wrong repository or is unreachable:
+Use `sourceRepository` to pin a specific GitHub URL when registry metadata is unavailable or the heuristic does not match the provider repository:
 
 ```yaml
 spec:

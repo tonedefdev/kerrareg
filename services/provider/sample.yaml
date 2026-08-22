@@ -6,6 +6,7 @@ metadata:
 spec:
   providerConfig:
     name: aws
+    upstreamRegistry: registry.opentofu.org
     operatingSystems:
       - linux
       - darwin

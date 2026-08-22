@@ -667,6 +667,11 @@ func (in *ProviderConfig) DeepCopyInto(out *ProviderConfig) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.UpstreamRegistry != nil {
+		in, out := &in.UpstreamRegistry, &out.UpstreamRegistry
+		*out = new(string)
+		**out = **in
+	}
 	if in.OperatingSystems != nil {
 		in, out := &in.OperatingSystems, &out.OperatingSystems
 		*out = make([]string, len(*in))

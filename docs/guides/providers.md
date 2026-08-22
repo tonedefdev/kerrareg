@@ -7,14 +7,13 @@ tags:
 
 # Consuming Providers
 
-OpenDepot implements the **OpenTofu Provider Network Mirror Protocol** so your OpenTofu configurations can reference providers by their canonical upstream identity (e.g., `hashicorp/aws` or `registry.opentofu.org/hashicorp/aws`) while installing provider binaries from OpenDepot. The lockfile preserves the canonical identity, so your IaC stays portable across teams and environments.
+OpenDepot implements the **Provider Network Mirror Protocol** (shared by OpenTofu and Terraform) so your configurations can reference providers by their canonical upstream identity (e.g., `hashicorp/aws` or `registry.opentofu.org/hashicorp/aws` or `registry.terraform.io/hashicorp/aws`) while installing provider binaries from OpenDepot. The lockfile preserves the canonical identity, so your IaC stays portable across teams and environments.
 
-## Default workflow: Network Mirror (OpenTofu only)
+OpenDepot supports providers from both `registry.opentofu.org` and `registry.terraform.io`. You configure the origin per `Provider` resource via `spec.providerConfig.upstreamRegistry`, which controls upstream discovery, archive acquisition, and the canonical provider identity exposed to clients. When omitted, the field defaults to `registry.opentofu.org`, reflecting OpenDepot's OpenTofu preference.
 
-!!! info "OpenTofu-only; registry.opentofu.org providers only"
-    The initial release supports OpenTofu and mirrors only providers originating from `registry.opentofu.org`. Direct `terraform` CLI support and multi-origin support may be added in future releases.
+## Default workflow: Network Mirror
 
-Once providers are synced, declare them in your OpenTofu configuration using their **canonical source identity**:
+Once providers are synced, declare them in your configuration using their **canonical source identity**:
 
 ```hcl
 terraform {
@@ -31,13 +30,17 @@ terraform {
 }
 ```
 
-The `source` field uses the format `<provider-namespace>/<provider-type>` (or the fully-qualified form `registry.opentofu.org/<provider-namespace>/<provider-type>`). This matches the upstream `registry.opentofu.org` identity, not your OpenDepot hostname.
+The `source` field uses the format `<provider-namespace>/<provider-type>` (or the fully-qualified form like `registry.opentofu.org/<provider-namespace>/<provider-type>` or `registry.terraform.io/<provider-namespace>/<provider-type>`). This matches the upstream identity configured in the `Provider` resource's `spec.providerConfig.upstreamRegistry` field, not your OpenDepot hostname.
 
 **CLI configuration: namespace-scoped mirror URL**
 
-Because the canonical source does not reference OpenDepot directly, you configure OpenDepot as the **installation source** in your `.tofurc` file using a `provider_installation` block:
+Because the canonical source does not reference OpenDepot directly, you configure OpenDepot as the **installation source** in your CLI configuration file (`.tofurc` for OpenTofu, `.terraformrc` for Terraform) using a `provider_installation` block.
 
-=== "Anonymous access"
+The `network_mirror.include` and `direct.exclude` patterns must use the **same canonical hostname** as the `upstreamRegistry` field in your `Provider` resources. For example, if your Provider resource sets `upstreamRegistry: registry.terraform.io`, use `include = ["registry.terraform.io/*/*"]` and `exclude = ["registry.terraform.io/*/*"]` in your CLI configuration.
+
+=== "OpenTofu (registry.opentofu.org)"
+
+    **Anonymous access**
 
     ```hcl
     provider_installation {
@@ -54,7 +57,7 @@ Because the canonical source does not reference OpenDepot directly, you configur
 
     The `direct.exclude` entry prevents OpenTofu from falling back to `registry.opentofu.org` if a mirrored provider is missing a version, ensuring all installations come from OpenDepot.
 
-=== "Authenticated access (OIDC)"
+    **Authenticated access (OIDC)**
 
     ```hcl
     credentials "opendepot.defdev.io" {
@@ -79,6 +82,50 @@ Because the canonical source does not reference OpenDepot directly, you configur
     ```
     Or retrieve it directly from your OIDC provider and place it in `.tofurc`.
 
+=== "Terraform (registry.terraform.io)"
+
+    **Anonymous access**
+
+    ```hcl
+    provider_installation {
+      network_mirror {
+        url     = "https://opendepot.defdev.io/opendepot/providers/mirror/v1/opendepot-system/"
+        include = ["registry.terraform.io/*/*"]
+      }
+
+      direct {
+        exclude = ["registry.terraform.io/*/*"]
+      }
+    }
+    ```
+
+    The `direct.exclude` entry prevents Terraform from falling back to `registry.terraform.io` if a mirrored provider is missing a version, ensuring all installations come from OpenDepot.
+
+    **Authenticated access (OIDC)**
+
+    ```hcl
+    credentials "opendepot.defdev.io" {
+      token = "<oidc-access-token>"
+    }
+
+    provider_installation {
+      network_mirror {
+        url     = "https://opendepot.defdev.io/opendepot/providers/mirror/v1/opendepot-system/"
+        include = ["registry.terraform.io/*/*"]
+      }
+
+      direct {
+        exclude = ["registry.terraform.io/*/*"]
+      }
+    }
+    ```
+
+    Obtain a token:
+    ```bash
+    terraform login opendepot.defdev.io
+    ```
+    Or retrieve it directly from your OIDC provider and place it in `.terraformrc`.
+
 === "Non-default port"
 
     When your OpenDepot instance runs on a non-default port, include the port in both the `credentials` hostname and the `network_mirror.url`:
@@ -102,16 +149,17 @@ Because the canonical source does not reference OpenDepot directly, you configur
 
 **Key details**
 
-- **Hostname versus namespace**: Credentials are matched by the OpenDepot hostname (and port, if non-default). The mirror URL is namespace-scoped — `/opendepot/providers/mirror/v1/<kubernetes-namespace>/` — and OpenTofu authenticates metadata requests using the credentials associated with the hostname.
-- **Canonical identity in lockfile**: The `.terraform.lock.hcl` records the canonical `registry.opentofu.org/hashicorp/aws` identity, not an OpenDepot-specific hostname. This preserves portability — teams can switch between OpenDepot instances or upstream without rewriting source declarations.
-- **Mirror-only installation**: The `direct.exclude` entry is critical. Without it, OpenTofu may fall back to `registry.opentofu.org` if a mirrored provider lacks a version you request, bypassing OpenDepot's scanning and access controls.
+- **Hostname versus namespace**: Credentials are matched by the OpenDepot hostname (and port, if non-default). The mirror URL is namespace-scoped — `/opendepot/providers/mirror/v1/<kubernetes-namespace>/` — and the CLI authenticates metadata requests using the credentials associated with the hostname.
+- **Canonical identity in lockfile**: The `.terraform.lock.hcl` records the canonical upstream identity (e.g., `registry.opentofu.org/hashicorp/aws` or `registry.terraform.io/hashicorp/aws`), not an OpenDepot-specific hostname. This preserves portability — teams can switch between OpenDepot instances or upstream without rewriting source declarations.
+- **Mirror-only installation**: The `direct.exclude` entry is critical. Without it, the CLI may fall back to the upstream registry if a mirrored provider lacks a version you request, bypassing OpenDepot's scanning and access controls.
+- **One installation serving both origins**: A single default cluster-scoped OpenDepot installation can serve providers from both `registry.opentofu.org` and `registry.terraform.io` by placing them in separate Kubernetes namespaces. If the same canonical provider namespace/type is mirrored from both origins (e.g., `hashicorp/aws` from both registries), place them in separate Kubernetes namespaces to avoid Version resource-name collisions. When `rbac.scopeToNamespace: true` restricts controllers to `global.namespace`, serving origins from multiple namespaces requires broader cluster scope or separate namespace-scoped installations.
 
 !!! note
-    Provider archive downloads (the binary, `SHA256SUMS`, and `SHA256SUMS.sig`) do not require client authentication when using anonymous mirror access. OpenTofu fetches these URLs after receiving the archive metadata from the metadata endpoint. When authentication is enabled, the metadata endpoint is protected, but archive URLs themselves are either unauthenticated or presigned depending on your storage backend configuration. See [Storage Backends](../storage.md#pre-signed-url-redirects) for presigned URL behavior.
+    Provider archive downloads (the binary, `SHA256SUMS`, and `SHA256SUMS.sig`) do not require client authentication when using anonymous mirror access. The CLI fetches these URLs after receiving the archive metadata from the metadata endpoint. When authentication is enabled, the metadata endpoint is protected, but archive URLs themselves are either unauthenticated or presigned depending on your storage backend configuration. See [Storage Backends](../storage.md#pre-signed-url-redirects) for presigned URL behavior.
 
 ## Advanced: Direct OpenDepot provider identity
 
-For private or internal providers not mirrored from `registry.opentofu.org`, OpenDepot still supports the **Provider Registry Protocol** with direct OpenDepot identity. In this mode, the `source` field references your OpenDepot hostname and Kubernetes namespace directly:
+For private or internal providers not mirrored from an upstream registry, OpenDepot still supports the **Provider Registry Protocol** with direct OpenDepot identity. In this mode, the `source` field references your OpenDepot hostname and Kubernetes namespace directly:
 
 ```hcl
 terraform {
@@ -140,7 +188,7 @@ host "opendepot.defdev.io" {
 }
 ```
 
-This approach is recommended **only** when the provider is not sourced from `registry.opentofu.org` or when you need OpenTofu/Terraform dual-compatibility in a transitional state. For canonical `registry.opentofu.org` providers, use the Network Mirror workflow above.
+This approach is recommended **only** for private or internal providers not sourced from an upstream registry. For canonical providers from `registry.opentofu.org` or `registry.terraform.io`, use the Network Mirror workflow above.
 
 ## Next Steps for Admins
 

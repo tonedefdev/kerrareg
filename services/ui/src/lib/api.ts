@@ -30,6 +30,7 @@ export interface BrowseResource {
   provider: string;
   repoUrl: string;
   providerNamespace: string;
+  upstreamRegistry: string;
   platforms: Array<{ os: string; arch: string }>;
   scanCounts: BrowseScanCounts | null;
   lastScanned: string;
@@ -249,6 +250,7 @@ export interface BrowseGraphProvider {
   namespace: string;
   name: string;
   providerNamespace?: string;
+  upstreamRegistry?: string;
   synced: boolean;
 }
 

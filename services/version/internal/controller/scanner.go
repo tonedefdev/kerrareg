@@ -146,8 +146,8 @@ func parseTrivyReport(data []byte, filter func(trivyResult) bool) ([]opendepotv1
 
 // resolveProviderSourceRepository returns the VCS source URL for a provider.
 // If ProviderConfig.SourceRepository is set it is used directly (explicit override).
-// Otherwise the OpenTofu registry docs API (api.opentofu.org) is queried for the provider's
-// repository link. If that lookup fails, a heuristic URL is derived from the namespace and name.
+// For OpenTofu providers, the registry docs API is queried for the repository link.
+// If that lookup is unavailable or the provider comes from another registry, a heuristic URL is derived.
 func resolveProviderSourceRepository(ctx context.Context, namespace, providerName string, cfg *opendepotv1alpha1.ProviderConfig) string {
 	if cfg != nil && cfg.SourceRepository != nil && strings.TrimSpace(*cfg.SourceRepository) != "" {
 		return strings.TrimSpace(*cfg.SourceRepository)
@@ -157,9 +157,11 @@ func resolveProviderSourceRepository(ctx context.Context, namespace, providerNam
 		namespace = "hashicorp"
 	}
 
-	repoURL, err := registry.LookupProviderRepo(ctx, namespace, providerName)
-	if err == nil && repoURL != "" {
-		return repoURL
+	if opendepotv1alpha1.ProviderUpstreamRegistry(cfg) == opendepotv1alpha1.OpenTofuRegistryHost {
+		repoURL, err := registry.LookupProviderRepo(ctx, namespace, providerName)
+		if err == nil && repoURL != "" {
+			return repoURL
+		}
 	}
 
 	// Fall back to heuristic — scan degrades gracefully rather than blocking sync.

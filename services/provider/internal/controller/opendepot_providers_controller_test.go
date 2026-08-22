@@ -111,8 +111,8 @@ var _ = Describe("Provider Controller", func() {
 			Expect(updated.Status.Synced).To(BeTrue())
 			Expect(updated.Status.SyncStatus).To(Equal("Successfully synced provider"))
 			Expect(updated.Status.ProviderVersionRefs).To(HaveLen(8))
-			Expect(updated.Status.ProviderVersionRefs["1.0.0/linux/amd64"]).NotTo(BeNil())
-			Expect(updated.Status.ProviderVersionRefs["2.0.0/darwin/arm64"]).NotTo(BeNil())
+			Expect(updated.Status.ProviderVersionRefs["1.0.0-linux-amd64"]).NotTo(BeNil())
+			Expect(updated.Status.ProviderVersionRefs["2.0.0-darwin-arm64"]).NotTo(BeNil())
 		})
 
 		It("returns an error when operatingSystems is empty", func() {

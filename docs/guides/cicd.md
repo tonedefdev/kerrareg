@@ -104,6 +104,8 @@ jobs:
 
 This configures OpenTofu to install providers from OpenDepot via the Network Mirror Protocol while preserving canonical `registry.opentofu.org` provider identity in your configuration and lockfile. The CC token is short-lived (TTL controlled by Dex) and scoped to read-only operations via the `GroupBinding`. No `kubectl` access or cluster kubeconfig is required — only the Dex token endpoint must be reachable from the runner.
 
+To use Terraform instead, rename the file to `.terraformrc` and replace `setup-opentofu` with `hashicorp/setup-terraform`. If your `Provider` resources use `upstreamRegistry: registry.terraform.io`, update the `include` and `exclude` patterns to `registry.terraform.io/*/*`.
+
 For full configuration details see [Client Credentials (Machine-to-Machine)](../configuration/oidc.md#client-credentials-machine-to-machine). For a side-by-side comparison of all supported authentication methods and their access-control mechanisms, see the [Authentication Comparison](../authentication.md#authentication-comparison) table.
 
 ## Registry Reads: SA Fallback with OIDC
@@ -223,6 +225,8 @@ jobs:
 ```
 
 This configures OpenTofu to install providers from OpenDepot via the Network Mirror Protocol while preserving canonical `registry.opentofu.org` provider identity. The SA token is short-lived (15 minutes) and scoped to read-only registry operations via the RBAC defined above. No Dex client credentials are needed.
+
+To use Terraform instead, rename the file to `.terraformrc` and replace `setup-opentofu` with `hashicorp/setup-terraform`. If your `Provider` resources use `upstreamRegistry: registry.terraform.io`, update the `include` and `exclude` patterns to `registry.terraform.io/*/*`.
 
 This approach uses `kubectl create token` to authenticate as the dedicated `ci-registry-reader` SA, keeping the pipeline's registry access strictly bounded to the RBAC above — regardless of how broad the runner's cloud IAM role is. If your runner's cloud IAM role already has appropriate K8s RBAC configured, you can simplify by using the provider token directly instead of creating an SA token (see [Managed Cluster Tokens](../authentication.md#method-2-managed-cluster-tokens)).
 

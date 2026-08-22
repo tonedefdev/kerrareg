@@ -37,12 +37,12 @@ The most critical component. It performs the actual work of fetching module and 
 
 **Reconciliation loop (providers):**
 
-1. Queries the OpenTofu registry API (`registry.opentofu.org`) for the provider binary matching the target OS/architecture
+1. Queries the configured upstream provider registry API (either `registry.opentofu.org` or `registry.terraform.io`, based on `spec.providerConfig.upstreamRegistry`) for the provider binary matching the target OS/architecture
 2. Downloads the provider archive (`.zip`)
 3. Generates a UUID7 filename and persists it to `spec.fileName` on the `Version` resource — subsequent reconciliations reuse the same filename, preventing duplicate uploads
 4. Computes a SHA256 checksum and generates a detached GPG signature over the `SHA256SUMS` file
 5. Uploads the archive to the configured storage backend
-6. When scanning is enabled, runs a binary scan (`trivy rootfs`) against the extracted provider binary and stores findings in `Version.status.binaryScan`; resolves the provider's source repository (explicit override → OpenTofu registry lookup → heuristic fallback), writes the resolved URL to `Provider.status.resolvedSourceRepository`, and runs a source scan (`trivy fs`) storing results in `Version.status.sourceScan` (deduplicated across OS/architecture variants of the same version)
+6. When scanning is enabled, runs a binary scan (`trivy rootfs`) against the extracted provider binary and stores findings in `Version.status.binaryScan`; resolves the provider's source repository (explicit override → upstream registry lookup → heuristic fallback), writes the resolved URL to `Provider.status.resolvedSourceRepository`, and runs a source scan (`trivy fs`) storing results in `Version.status.sourceScan` (deduplicated across OS/architecture variants of the same version)
 7. If `blockOnCritical` or `blockOnHigh` is configured, halts reconciliation for any version with findings at or above the threshold
 8. Updates the `Version` resource status with the sync state
 
