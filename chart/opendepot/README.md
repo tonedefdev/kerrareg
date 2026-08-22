@@ -57,6 +57,7 @@ helm install opendepot ./chart/opendepot \
 |-----------|---------|-------------|
 | `global.namespace` | `opendepot-system` | Kubernetes namespace for all resources |
 | `global.imagePullPolicy` | `IfNotPresent` | Image pull policy applied to all containers |
+| `global.developmentMode` | `false` | Disable read-only root filesystems for local live-update workflows such as Tilt. Do not enable in production |
 | `global.image.tag` | `""` | Default image tag for all services. Defaults to `Chart.AppVersion` when empty; set to override |
 
 ### Version Controller
@@ -412,7 +413,7 @@ kubectl delete -f chart/opendepot/crds/
 ## Security Notes
 
 - All controller containers run as UID `65532` with `runAsNonRoot: true` and `allowPrivilegeEscalation: false`.
-- The Server container sets `readOnlyRootFilesystem: true` unless filesystem storage is enabled.
+- Application containers set `readOnlyRootFilesystem: true` unless their runtime requires writable storage. Setting `global.developmentMode: true` disables this protection for local live-update workflows and must not be used in production.
 - When `server.anonymousAuth` is `false` and `server.useBearerToken` is `true` (the defaults), the server requires a valid bearer token on every request.
 - When `server.oidc.enabled` is `true`, the server validates OIDC JWTs locally via JWKS — no Dex round-trip per request.
 - Do not commit `server.oidc.clientSecret` or Dex connector secrets in plain text. Use an external secret operator (Sealed Secrets, External Secrets Operator) or pre-create the Secret and reference it via `server.oidc.clientSecretName`.

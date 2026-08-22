@@ -66,7 +66,9 @@ spec:
               key: sessionPassword
         securityContext:
           allowPrivilegeEscalation: false
+          {{- if not .Values.global.developmentMode }}
           readOnlyRootFilesystem: true
+          {{- end }}
         volumeMounts:
         - name: nginx-config
           mountPath: /etc/nginx/nginx.conf.template

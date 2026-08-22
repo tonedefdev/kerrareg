@@ -117,7 +117,7 @@ spec:
           protocol: TCP
         securityContext:
           allowPrivilegeEscalation: false
-          {{- if not .Values.storage.filesystem.enabled }}
+          {{- if and (not .Values.global.developmentMode) (not .Values.storage.filesystem.enabled) }}
           readOnlyRootFilesystem: true
           {{- end }}
         resources:

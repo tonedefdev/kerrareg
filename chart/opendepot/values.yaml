@@ -4,6 +4,7 @@
 global:
   namespace: opendepot-system
   imagePullPolicy: IfNotPresent
+  developmentMode: false
   image:
     tag: ""  # Defaults to Chart.AppVersion when empty; set to override.
 
