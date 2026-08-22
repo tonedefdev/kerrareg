@@ -21,6 +21,8 @@ The Depot is well-suited to three scenarios:
 
 When you self-host a registry, you take ownership of provider distribution. The Depot mirrors providers from the HashiCorp Releases API so your teams never pull directly from an external source — and every version that enters your registry is scanned by Trivy before it becomes available.
 
+Providers mirrored by OpenDepot retain their **canonical identity** (e.g., `registry.opentofu.org/hashicorp/aws`). Your OpenTofu configurations reference the canonical source, and you configure OpenDepot as the installation source via the Network Mirror Protocol. See [Consuming Providers](../guides/providers.md) for full `.tofurc` configuration examples.
+
 ```yaml
 apiVersion: opendepot.defdev.io/v1alpha1
 kind: Depot

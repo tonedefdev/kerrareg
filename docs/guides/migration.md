@@ -21,7 +21,7 @@ tags:
 
 1. Create a `Depot` with `providerConfigs` listing each provider, your target OS/architecture matrix, and a version constraint
 2. Wait for all `Provider` and `Version` resources to sync
-3. Update your OpenTofu/Terraform configurations to source providers from OpenDepot (see [Consuming Providers](../guides/providers.md))
+3. Update your OpenTofu configurations to reference providers by their canonical identity (e.g., `hashicorp/aws`) and configure OpenDepot as the installation source via `provider_installation.network_mirror` in your `.tofurc` (see [Consuming Providers](../guides/providers.md) for full `.tofurc` examples)
 4. Delete the Depot — all `Provider` and `Version` resources remain untouched
 
 This pattern lets you adopt OpenDepot incrementally without disrupting existing workflows. The Depot bridges the gap between the public registries and a fully self-hosted solution.

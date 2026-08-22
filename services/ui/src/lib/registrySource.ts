@@ -10,6 +10,14 @@ export function buildProviderSource(registryHost: string, namespace: string, nam
   return `${registryHost}/${namespace}/${name}`;
 }
 
+export function buildCanonicalProviderSource(namespace: string, name: string): string {
+  return `${namespace || "hashicorp"}/${name}`;
+}
+
+export function buildProviderMirrorUrl(baseUrl: string, namespace: string): string {
+  return `${baseUrl.replace(/\/$/, "")}/opendepot/providers/mirror/v1/${namespace}/`;
+}
+
 export function buildModuleSource(
   registryHost: string,
   namespace: string,

@@ -18,12 +18,22 @@ package e2e
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -36,6 +46,19 @@ import (
 // namespace where the project is deployed in.
 const namespace = "opendepot-system"
 
+type providerMirrorVersionsResponse struct {
+	Versions map[string]struct{} `json:"versions"`
+}
+
+type providerMirrorArchivesResponse struct {
+	Archives map[string]providerMirrorArchive `json:"archives"`
+}
+
+type providerMirrorArchive struct {
+	URL    string   `json:"url"`
+	Hashes []string `json:"hashes"`
+}
+
 var _ = Describe("Provider", Ordered, func() {
 	const (
 		providerNamespace     = "opendepot-system"
@@ -46,10 +69,24 @@ var _ = Describe("Provider", Ordered, func() {
 		providerStoragePath   = "/data/modules"
 	)
 
-	var pfCancel context.CancelFunc
+	var (
+		pfCancel          context.CancelFunc
+		mirrorTLSServer   *httptest.Server
+		mirrorTLSCertDir  string
+		mirrorTLSCertPath string
+	)
 
 	BeforeAll(func() {
 		By("applying the test Provider CR")
+		operatingSystems := "      - linux"
+		if runtime.GOOS != "linux" {
+			operatingSystems += "\n      - " + runtime.GOOS
+		}
+		architectures := "      - amd64"
+		if runtime.GOARCH != "amd64" {
+			architectures += "\n      - " + runtime.GOARCH
+		}
+
 		providerYAML := fmt.Sprintf(`
 apiVersion: opendepot.defdev.io/v1alpha1
 kind: Provider
@@ -60,15 +97,15 @@ spec:
   providerConfig:
     name: "%s"
     operatingSystems:
-      - linux
+%s
     architectures:
-      - amd64
+%s
     storageConfig:
       fileSystem:
         directoryPath: %s
   versions:
     - version: "%s"
-`, providerCRName, providerNamespace, providerCRName, providerStoragePath, providerVersion)
+`, providerCRName, providerNamespace, providerCRName, operatingSystems, architectures, providerStoragePath, providerVersion)
 
 		providerFile := filepath.Join(GinkgoT().TempDir(), "test-provider.yaml")
 		Expect(os.WriteFile(providerFile, []byte(providerYAML), 0600)).To(Succeed())
@@ -87,11 +124,40 @@ spec:
 		Expect(pfCmd.Start()).To(Succeed(), "Failed to start port-forward")
 		// Allow port-forward to establish.
 		time.Sleep(3 * time.Second)
+
+		upstream, err := url.Parse(fmt.Sprintf("http://localhost:%s", serverPortForwardPort))
+		Expect(err).NotTo(HaveOccurred())
+		mirrorTLSCertDir, err = os.MkdirTemp("", "opendepot-provider-mirror-ca-")
+		Expect(err).NotTo(HaveOccurred())
+		mirrorTLSCertPath = filepath.Join(mirrorTLSCertDir, "mirror.crt")
+		mirrorTLSKeyPath := filepath.Join(mirrorTLSCertDir, "mirror.key")
+		mkcertCmd := exec.Command("mkcert", "-cert-file", mirrorTLSCertPath, "-key-file", mirrorTLSKeyPath,
+			"opendepot.localtest.me", "localhost", "127.0.0.1", "::1",
+		)
+		output, err := mkcertCmd.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), "failed to generate network mirror TLS certificate; output:\n%s", string(output))
+		certificate, err := tls.LoadX509KeyPair(mirrorTLSCertPath, mirrorTLSKeyPath)
+		Expect(err).NotTo(HaveOccurred())
+		mirrorTLSServer = httptest.NewUnstartedServer(httputil.NewSingleHostReverseProxy(upstream))
+		mirrorTLSServer.TLS = &tls.Config{
+			Certificates: []tls.Certificate{certificate},
+			MinVersion:   tls.VersionTLS12,
+		}
+		mirrorTLSServer.StartTLS()
+		_, mirrorPort, err := net.SplitHostPort(mirrorTLSServer.Listener.Addr().String())
+		Expect(err).NotTo(HaveOccurred())
+		mirrorTLSServer.URL = "https://opendepot.localtest.me:" + mirrorPort
 	})
 
 	AfterAll(func() {
 		if pfCancel != nil {
 			pfCancel()
+		}
+		if mirrorTLSServer != nil {
+			mirrorTLSServer.Close()
+		}
+		if mirrorTLSCertDir != "" {
+			Expect(os.RemoveAll(mirrorTLSCertDir)).To(Succeed())
 		}
 		cmd := exec.Command("kubectl", "delete", "provider", providerCRName,
 			"-n", providerNamespace, "--ignore-not-found",
@@ -250,6 +316,104 @@ spec:
 		Expect(string(output)).To(ContainSubstring("successfully initialized"))
 	})
 
+	It("should install the canonical provider identity through the network mirror", func() {
+		currentVersionCRName := fmt.Sprintf("null-3-2-3-%s-%s", runtime.GOOS, runtime.GOARCH)
+		By("waiting for the host platform provider artifact")
+		Eventually(func(g Gomega) {
+			output, err := utils.Run(exec.Command("kubectl", "get", "version", currentVersionCRName,
+				"-n", providerNamespace,
+				"-o", `jsonpath={.status.synced},{.status.checksum}`,
+			))
+			g.Expect(err).NotTo(HaveOccurred())
+			parts := strings.SplitN(output, ",", 2)
+			g.Expect(parts).To(HaveLen(2))
+			g.Expect(parts[0]).To(Equal("true"))
+			g.Expect(parts[1]).NotTo(BeEmpty())
+		}, 5*time.Minute, 5*time.Second).Should(Succeed())
+
+		mirrorBaseURL := fmt.Sprintf("%s/opendepot/providers/mirror/v1/%s/", mirrorTLSServer.URL, providerNamespace)
+		providerBaseURL := mirrorBaseURL + "registry.opentofu.org/hashicorp/null/"
+
+		By("checking the network mirror version index")
+		response, err := mirrorTLSServer.Client().Get(providerBaseURL + "index.json")
+		Expect(err).NotTo(HaveOccurred())
+		defer response.Body.Close()
+		Expect(response.StatusCode).To(Equal(http.StatusOK))
+		var index providerMirrorVersionsResponse
+		Expect(json.NewDecoder(response.Body).Decode(&index)).To(Succeed())
+		Expect(index.Versions).To(HaveKey(providerVersion))
+
+		By("checking platform metadata and archive integrity")
+		metadataURL := providerBaseURL + providerVersion + ".json"
+		response, err = mirrorTLSServer.Client().Get(metadataURL)
+		Expect(err).NotTo(HaveOccurred())
+		defer response.Body.Close()
+		Expect(response.StatusCode).To(Equal(http.StatusOK))
+		var metadata providerMirrorArchivesResponse
+		Expect(json.NewDecoder(response.Body).Decode(&metadata)).To(Succeed())
+		platform := runtime.GOOS + "_" + runtime.GOARCH
+		archive, exists := metadata.Archives[platform]
+		Expect(exists).To(BeTrue())
+		Expect(archive.Hashes).To(HaveLen(1))
+		Expect(archive.Hashes[0]).To(HavePrefix("zh:"))
+
+		expectedChecksum, err := utils.Run(exec.Command("kubectl", "get", "version", currentVersionCRName,
+			"-n", providerNamespace,
+			"-o", `jsonpath={.status.checksum}`,
+		))
+		Expect(err).NotTo(HaveOccurred())
+		expectedChecksumBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(expectedChecksum))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(archive.Hashes[0]).To(Equal("zh:" + hex.EncodeToString(expectedChecksumBytes)))
+
+		metadataLocation, err := url.Parse(metadataURL)
+		Expect(err).NotTo(HaveOccurred())
+		archiveLocation, err := metadataLocation.Parse(archive.URL)
+		Expect(err).NotTo(HaveOccurred())
+		archiveResponse, err := mirrorTLSServer.Client().Get(archiveLocation.String())
+		Expect(err).NotTo(HaveOccurred())
+		defer archiveResponse.Body.Close()
+		Expect(archiveResponse.StatusCode).To(Equal(http.StatusOK))
+		archiveBytes, err := io.ReadAll(archiveResponse.Body)
+		Expect(err).NotTo(HaveOccurred())
+		digest := sha256.Sum256(archiveBytes)
+		Expect(base64.StdEncoding.EncodeToString(digest[:])).To(Equal(strings.TrimSpace(expectedChecksum)))
+
+		By("running tofu init with direct installation disabled")
+		workDir := GinkgoT().TempDir()
+		mainTF := fmt.Sprintf(`terraform {
+  required_providers {
+    null = {
+      source  = "registry.opentofu.org/hashicorp/null"
+      version = "%s"
+    }
+  }
+}
+`, providerVersion)
+		Expect(os.WriteFile(filepath.Join(workDir, "main.tf"), []byte(mainTF), 0600)).To(Succeed())
+		tofuRC := fmt.Sprintf(`provider_installation {
+  network_mirror {
+    url     = "%s"
+    include = ["registry.opentofu.org/hashicorp/null"]
+  }
+  direct {
+    exclude = ["registry.opentofu.org/hashicorp/null"]
+  }
+}
+`, mirrorBaseURL)
+		tofuRCPath := filepath.Join(workDir, ".tofurc")
+		Expect(os.WriteFile(tofuRCPath, []byte(tofuRC), 0600)).To(Succeed())
+		initCmd := exec.Command("tofu", "init", "-no-color")
+		initCmd.Dir = workDir
+		initCmd.Env = append(os.Environ(), "TF_CLI_CONFIG_FILE="+tofuRCPath)
+		output, err := initCmd.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), "network mirror tofu init failed; output:\n%s", string(output))
+		Expect(string(output)).To(ContainSubstring("successfully initialized"))
+		lockFile, err := os.ReadFile(filepath.Join(workDir, ".terraform.lock.hcl"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(lockFile)).To(ContainSubstring(`provider "registry.opentofu.org/hashicorp/null"`))
+	})
+
 	It("should enforce Kubernetes RBAC when anonymousAuth is disabled", func() {
 		const (
 			authTestSA   = "opendepot-e2e-provider-reader"
@@ -328,6 +492,14 @@ spec:
 		_ = unauthResp.Body.Close()
 		Expect(unauthResp.StatusCode).To(Equal(http.StatusUnauthorized))
 
+		mirrorVersionsURL := fmt.Sprintf("%s/opendepot/providers/mirror/v1/%s/registry.opentofu.org/hashicorp/null/index.json",
+			mirrorTLSServer.URL, providerNamespace)
+		By("verifying unauthenticated mirror metadata returns 401")
+		unauthMirrorResp, err := mirrorTLSServer.Client().Get(mirrorVersionsURL)
+		Expect(err).NotTo(HaveOccurred())
+		_ = unauthMirrorResp.Body.Close()
+		Expect(unauthMirrorResp.StatusCode).To(Equal(http.StatusUnauthorized))
+
 		By("creating a read-only ServiceAccount and RBAC for the auth test")
 		_, _ = utils.Run(exec.Command("kubectl", "create", "serviceaccount", authTestSA, "-n", providerNamespace))
 		_, _ = utils.Run(exec.Command("kubectl", "create", "role", authTestRole,
@@ -349,6 +521,18 @@ spec:
 		Expect(err).NotTo(HaveOccurred())
 		token := strings.TrimSpace(tokenOutput)
 		Expect(token).NotTo(BeEmpty())
+
+		By("verifying read-only Kubernetes RBAC authorizes mirror metadata")
+		authMirrorRequest, err := http.NewRequest(http.MethodGet, mirrorVersionsURL, nil)
+		Expect(err).NotTo(HaveOccurred())
+		authMirrorRequest.Header.Set("Authorization", "Bearer "+token)
+		authMirrorResp, err := mirrorTLSServer.Client().Do(authMirrorRequest)
+		Expect(err).NotTo(HaveOccurred())
+		defer authMirrorResp.Body.Close()
+		Expect(authMirrorResp.StatusCode).To(Equal(http.StatusOK))
+		var mirrorVersions providerMirrorVersionsResponse
+		Expect(json.NewDecoder(authMirrorResp.Body).Decode(&mirrorVersions)).To(Succeed())
+		Expect(mirrorVersions.Versions).To(HaveKey(providerVersion))
 
 		// OpenTofu sends credentials (from the .tofurc credentials block) over HTTP for
 		// hostnames that are not the loopback address "localhost". We use

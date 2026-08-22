@@ -314,22 +314,41 @@ See [GroupBinding Access Control](groupbinding.md) for full expression syntax, c
 
 ## HCL Usage Snippets
 
-Every module and provider detail page (`/<namespace>/<kind>/<name>`) shows a **Usage** card with a ready-to-paste HCL block and a copy-to-clipboard button.
+Every module and provider detail page (`/<namespace>/<kind>/<name>`) shows a **Usage** card with ready-to-paste HCL blocks and copy-to-clipboard buttons.
 
-For a **provider**, the card shows a `versions.tf` block:
+For a **provider**, the card shows two snippets:
+
+1. **OpenTofu CLI configuration** (`.tofurc`) with the `provider_installation.network_mirror` block:
+
+```hcl
+provider_installation {
+  network_mirror {
+    url     = "<mirrorUrl>"
+    include = ["<canonicalSource>"]
+  }
+
+  direct {
+    exclude = ["<canonicalSource>"]
+  }
+}
+```
+
+2. **Provider requirement** block with the canonical source identity:
 
 ```hcl
 terraform {
   required_providers {
     <name> = {
-      source  = "<registryHost>/<namespace>/<name>"
+      source  = "<providerNamespace>/<name>"
       version = "<latestVersion>"
     }
   }
 }
 ```
 
-For a **module**, the card shows a `module` block:
+The canonical source (e.g., `hashicorp/aws`) is preserved in your configuration and lockfile, while the mirror URL tells OpenTofu to install from OpenDepot. See [Consuming Providers](providers.md) for full details on the Network Mirror workflow.
+
+For a **module**, the card shows a single `module` block:
 
 ```hcl
 module "<name>" {

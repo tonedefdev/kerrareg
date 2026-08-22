@@ -206,6 +206,12 @@ jobs:
         with:
           tofu_version: "1.6.0"
 
+      - name: Install local TLS certificate authority
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mkcert libnss3-tools
+          mkcert -install
+
       - name: Create kind cluster
         run: kind create cluster --name opendepot-test-e2e
 

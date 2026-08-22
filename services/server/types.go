@@ -52,6 +52,24 @@ type ProviderPlatform struct {
 	Arch string `json:"arch"`
 }
 
+// ProviderMirrorVersionsResponse is the version index returned by the
+// OpenTofu Provider Network Mirror Protocol.
+type ProviderMirrorVersionsResponse struct {
+	Versions map[string]struct{} `json:"versions"`
+}
+
+// ProviderMirrorArchivesResponse lists the available installation packages for
+// one provider version, keyed by target platform.
+type ProviderMirrorArchivesResponse struct {
+	Archives map[string]ProviderMirrorArchive `json:"archives"`
+}
+
+// ProviderMirrorArchive describes one provider package available from the mirror.
+type ProviderMirrorArchive struct {
+	URL    string   `json:"url"`
+	Hashes []string `json:"hashes,omitempty"`
+}
+
 // ProviderPackageMetadataResponse is the JSON body returned by the provider package
 // metadata endpoint. It provides download, checksum, and signing-key details consumed
 // by the OpenTofu provider installer.

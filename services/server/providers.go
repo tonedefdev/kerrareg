@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -21,6 +22,274 @@ import (
 	storageTypes "github.com/tonedefdev/opendepot/pkg/storage/types"
 	opendepotUtils "github.com/tonedefdev/opendepot/pkg/utils"
 )
+
+const openTofuRegistryHost = "registry.opentofu.org"
+
+func providerConfigIdentity(providerConfig *opendepotv1alpha1.ProviderConfig, fallbackName string) (string, string) {
+	providerNamespace := "hashicorp"
+	providerName := fallbackName
+	if providerConfig == nil {
+		return providerNamespace, providerName
+	}
+
+	if providerConfig.Namespace != nil && strings.TrimSpace(*providerConfig.Namespace) != "" {
+		providerNamespace = strings.TrimSpace(*providerConfig.Namespace)
+	}
+
+	if providerConfig.Name != nil && strings.TrimSpace(*providerConfig.Name) != "" {
+		providerName = strings.TrimSpace(*providerConfig.Name)
+	}
+
+	return providerNamespace, providerName
+}
+
+func getMirrorProvider(clientset *kubernetes.Clientset, namespace, providerNamespace, providerType string, r *http.Request) (*opendepotv1alpha1.Provider, error) {
+	result, err := clientset.RESTClient().
+		Get().
+		AbsPath("/apis/opendepot.defdev.io/v1alpha1").
+		Namespace(namespace).
+		Resource("providers").
+		DoRaw(r.Context())
+	if err != nil {
+		return nil, err
+	}
+
+	var providerList opendepotv1alpha1.ProviderList
+	if err := json.Unmarshal(result, &providerList); err != nil {
+		return nil, fmt.Errorf("unmarshal providers list for network mirror: %w", err)
+	}
+
+	for index := range providerList.Items {
+		provider := &providerList.Items[index]
+		configuredNamespace, configuredName := providerConfigIdentity(&provider.Spec.ProviderConfig, provider.Name)
+		if configuredNamespace == providerNamespace && configuredName == providerType {
+			return provider, nil
+		}
+	}
+
+	return nil, nil
+}
+
+func listMirrorProviderVersions(clientset *kubernetes.Clientset, namespace, providerNamespace, providerType string, r *http.Request) ([]opendepotv1alpha1.Version, error) {
+	result, err := clientset.RESTClient().
+		Get().
+		AbsPath("/apis/opendepot.defdev.io/v1alpha1").
+		Namespace(namespace).
+		Resource("versions").
+		DoRaw(r.Context())
+	if err != nil {
+		return nil, err
+	}
+
+	var versionList opendepotv1alpha1.VersionList
+	if err := json.Unmarshal(result, &versionList); err != nil {
+		return nil, fmt.Errorf("unmarshal versions list for network mirror: %w", err)
+	}
+
+	versions := make([]opendepotv1alpha1.Version, 0)
+	for index := range versionList.Items {
+		version := versionList.Items[index]
+		configuredNamespace, configuredName := providerConfigIdentity(version.Spec.ProviderConfigRef, "")
+		if configuredNamespace != providerNamespace || configuredName != providerType {
+			continue
+		}
+
+		if !version.Status.Synced || version.Spec.FileName == nil || version.Status.Checksum == nil ||
+			version.Spec.OperatingSystem == "" || version.Spec.Architecture == "" {
+			continue
+		}
+
+		versions = append(versions, version)
+	}
+
+	return versions, nil
+}
+
+func findMirrorProviderVersion(versions []opendepotv1alpha1.Version, requestedVersion, osName, arch string) *opendepotv1alpha1.Version {
+	normalizedRequestedVersion := opendepotUtils.SanitizeVersion(requestedVersion)
+	for index := range versions {
+		version := &versions[index]
+		if opendepotUtils.SanitizeVersion(version.Spec.Version) == normalizedRequestedVersion &&
+			version.Spec.OperatingSystem == osName && version.Spec.Architecture == arch {
+			return version
+		}
+	}
+
+	return nil
+}
+
+func buildProviderMirrorVersionsResponse(versions []opendepotv1alpha1.Version) ProviderMirrorVersionsResponse {
+	response := ProviderMirrorVersionsResponse{Versions: make(map[string]struct{})}
+	for index := range versions {
+		version := opendepotUtils.SanitizeVersion(versions[index].Spec.Version)
+		if version != "" {
+			response.Versions[version] = struct{}{}
+		}
+	}
+
+	return response
+}
+
+func buildProviderMirrorArchivesResponse(versions []opendepotv1alpha1.Version, requestedVersion string) ProviderMirrorArchivesResponse {
+	normalizedRequestedVersion := opendepotUtils.SanitizeVersion(requestedVersion)
+	response := ProviderMirrorArchivesResponse{Archives: make(map[string]ProviderMirrorArchive)}
+	for index := range versions {
+		version := &versions[index]
+		if opendepotUtils.SanitizeVersion(version.Spec.Version) != normalizedRequestedVersion {
+			continue
+		}
+
+		platform := version.Spec.OperatingSystem + "_" + version.Spec.Architecture
+		checksumHex, err := decodeSHA256Checksum(*version.Status.Checksum)
+		if err != nil {
+			continue
+		}
+		response.Archives[platform] = ProviderMirrorArchive{
+			URL:    fmt.Sprintf("%s/%s/%s/%s", normalizedRequestedVersion, version.Spec.OperatingSystem, version.Spec.Architecture, path.Base(*version.Spec.FileName)),
+			Hashes: []string{"zh:" + checksumHex},
+		}
+	}
+
+	return response
+}
+
+func authorizeMirrorProvider(w http.ResponseWriter, r *http.Request) (*kubernetes.Clientset, *opendepotv1alpha1.Provider, bool) {
+	clientset, binding, subject, err := getKubeClientFromRequest(w, r)
+	if err != nil {
+		logger.Error("unable to generate kubeclient for provider mirror", "error", err)
+
+		return nil, nil, false
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	providerNamespace := chi.URLParam(r, "providerNamespace")
+	providerType := chi.URLParam(r, "type")
+	if chi.URLParam(r, "hostname") != openTofuRegistryHost {
+		http.Error(w, "provider not found", http.StatusNotFound)
+
+		return nil, nil, false
+	}
+
+	provider, err := getMirrorProvider(clientset, namespace, providerNamespace, providerType, r)
+	if err != nil {
+		logger.Error("unable to locate provider for network mirror", "error", err, "namespace", namespace, "providerNamespace", providerNamespace, "type", providerType)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+
+		return nil, nil, false
+	}
+
+	if provider == nil {
+		http.Error(w, "provider not found", http.StatusNotFound)
+
+		return nil, nil, false
+	}
+
+	if binding != nil && !isResourceAllowed(binding, "provider", provider.Name) {
+		logger.Warn("resource access denied", "subject", subject, "binding_name", binding.Name, "resource_type", "provider", "resource_name", provider.Name, "namespace", namespace)
+		http.Error(w, "forbidden", http.StatusForbidden)
+
+		return nil, nil, false
+	}
+
+	return clientset, provider, true
+}
+
+func getProviderMirrorVersions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	clientset, _, ok := authorizeMirrorProvider(w, r)
+	if !ok {
+		return
+	}
+
+	versions, err := listMirrorProviderVersions(clientset, chi.URLParam(r, "namespace"), chi.URLParam(r, "providerNamespace"), chi.URLParam(r, "type"), r)
+	if err != nil {
+		logger.Error("unable to list provider versions for network mirror", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	response := buildProviderMirrorVersionsResponse(versions)
+
+	if len(response.Versions) == 0 {
+		http.Error(w, "provider not found", http.StatusNotFound)
+
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func getProviderMirrorArchives(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	requestedVersion, ok := strings.CutSuffix(chi.URLParam(r, "versionFile"), ".json")
+	if !ok || requestedVersion == "" {
+		http.Error(w, "provider version not found", http.StatusNotFound)
+
+		return
+	}
+
+	clientset, _, ok := authorizeMirrorProvider(w, r)
+	if !ok {
+		return
+	}
+
+	versions, err := listMirrorProviderVersions(clientset, chi.URLParam(r, "namespace"), chi.URLParam(r, "providerNamespace"), chi.URLParam(r, "type"), r)
+	if err != nil {
+		logger.Error("unable to list provider archives for network mirror", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	response := buildProviderMirrorArchivesResponse(versions, requestedVersion)
+
+	if len(response.Archives) == 0 {
+		http.Error(w, "provider version not found", http.StatusNotFound)
+
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func serveProviderMirrorArchive(w http.ResponseWriter, r *http.Request) {
+	if chi.URLParam(r, "hostname") != openTofuRegistryHost {
+		http.Error(w, "provider package not found", http.StatusNotFound)
+
+		return
+	}
+
+	clientset, err := generateKubeClient(nil, nil, false)
+	if err != nil {
+		logger.Error("unable to generate kubeclient for provider mirror download", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	providerNamespace := chi.URLParam(r, "providerNamespace")
+	providerType := chi.URLParam(r, "type")
+	versions, err := listMirrorProviderVersions(clientset, namespace, providerNamespace, providerType, r)
+	if err != nil {
+		logger.Error("unable to list provider archives for network mirror download", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	versionResource := findMirrorProviderVersion(versions, chi.URLParam(r, "version"), chi.URLParam(r, "os"), chi.URLParam(r, "arch"))
+	if versionResource == nil || versionResource.Spec.FileName == nil || path.Base(*versionResource.Spec.FileName) != chi.URLParam(r, "filename") {
+		http.Error(w, "provider package not found", http.StatusNotFound)
+
+		return
+	}
+
+	serveProviderVersionDownload(w, r, namespace, providerType, chi.URLParam(r, "version"), versionResource)
+}
 
 // getProviderVersionResource scans all Version resources in the given namespace and
 // returns the first one whose ProviderConfigRef matches providerType and whose
@@ -299,6 +568,10 @@ func serveProviderPackageDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	serveProviderVersionDownload(w, r, namespace, providerType, requestedVersion, versionResource)
+}
+
+func serveProviderVersionDownload(w http.ResponseWriter, r *http.Request, namespace, providerType, requestedVersion string, versionResource *opendepotv1alpha1.Version) {
 	if versionResource.Status.Checksum == nil {
 		http.Error(w, "provider package checksum unavailable", http.StatusNotImplemented)
 		return
@@ -407,7 +680,7 @@ func getProviderPackageSHA256SUMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = w.Write([]byte(fmt.Sprintf("%s  %s\n", checksumHex, *versionResource.Spec.FileName)))
+	_, _ = w.Write(fmt.Appendf(nil, "%s  %s\n", checksumHex, *versionResource.Spec.FileName))
 }
 
 // getProviderPackageSHA256SUMSSignature serves the detached GPG signature of the

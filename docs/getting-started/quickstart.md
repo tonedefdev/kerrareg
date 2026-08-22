@@ -305,7 +305,7 @@ cat > main.tf <<'EOF'
 terraform {
   required_providers {
     aws = {
-      source  = "opendepot.localtest.me:8080/opendepot-system/aws"
+      source  = "hashicorp/aws"
       version = "5.80.0"
     }
   }
@@ -313,9 +313,14 @@ terraform {
 EOF
 
 cat > .tofurc <<'EOF'
-host "opendepot.localtest.me:8080" {
-  services = {
-    "providers.v1" = "http://opendepot.localtest.me:8080/opendepot/providers/v1/"
+provider_installation {
+  network_mirror {
+    url     = "http://opendepot.localtest.me:8080/opendepot/providers/mirror/v1/opendepot-system/"
+    include = ["registry.opentofu.org/*/*"]
+  }
+
+  direct {
+    exclude = ["registry.opentofu.org/*/*"]
   }
 }
 EOF
@@ -323,11 +328,11 @@ EOF
 TF_CLI_CONFIG_FILE=.tofurc tofu init
 ```
 
-The `.tofurc` `host` block overrides HTTPS protocol discovery for this hostname, allowing plain HTTP over the port-forward. OpenTofu will resolve `opendepot.localtest.me` to `127.0.0.1` and install the provider from your local OpenDepot instance:
+The `provider_installation` block tells OpenTofu to install providers from OpenDepot while preserving the canonical `hashicorp/aws` identity in your configuration and lockfile. The `direct.exclude` entry ensures installations always come from OpenDepot rather than falling back to `registry.opentofu.org`. OpenTofu will resolve `opendepot.localtest.me` to `127.0.0.1` and install the provider from your local OpenDepot instance:
 
 ```
 Initializing provider plugins...
-- Finding opendepot.localtest.me:8080/opendepot-system/aws versions matching "5.80.0"...
+- Finding hashicorp/aws versions matching "5.80.0"...
 - Installing opendepot.localtest.me:8080/opendepot-system/aws v5.80.0...
 - Installed opendepot.localtest.me:8080/opendepot-system/aws v5.80.0
 

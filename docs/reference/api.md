@@ -240,6 +240,94 @@ GET /opendepot/providers/v1/{namespace}/{type}/{version}/SHA256SUMS.sig/{os}/{ar
 
 Returns the detached GPG signature over the `SHA256SUMS` file, signed with the key configured in `server.gpg.secretName`. Does **not** require client authentication.
 
+## Provider Network Mirror Protocol
+
+!!! info "OpenTofu-only; registry.opentofu.org providers only"
+    The initial release supports OpenTofu and mirrors only providers originating from `registry.opentofu.org`. Direct `terraform` CLI support and multi-origin support may be added in future releases.
+
+OpenDepot implements the [OpenTofu Provider Network Mirror Protocol](https://opentofu.org/docs/internals/provider-network-mirror-protocol/) so configurations can reference providers by their canonical upstream identity (e.g., `registry.opentofu.org/hashicorp/aws`) while installing from OpenDepot. The mirror URL is namespace-scoped:
+
+```
+https://<host>/opendepot/providers/mirror/v1/<namespace>/
+```
+
+Clients configure this URL in their `.tofurc` via the `provider_installation.network_mirror` block. See [Consuming Providers](../guides/providers.md) for full usage examples.
+
+### Mirror: List Provider Versions
+
+```
+GET /opendepot/providers/mirror/v1/{namespace}/{hostname}/{providerNamespace}/{type}/index.json
+```
+
+Returns all available versions of a provider from the specified origin registry. Requires authentication when anonymous mode is disabled.
+
+**Path Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `namespace` | Kubernetes namespace of the Provider resource |
+| `hostname` | Origin registry hostname (currently only `registry.opentofu.org` is supported) |
+| `providerNamespace` | Provider namespace at the origin (e.g., `hashicorp`, `datadog`) |
+| `type` | Provider name (e.g., `aws`, `azurerm`) |
+
+**Response:**
+
+```json
+{
+  "versions": {
+    "5.80.0": {},
+    "5.81.0": {}
+  }
+}
+```
+
+The version keys are normalized semver strings without a leading `v`. The values are empty objects per the Network Mirror Protocol specification.
+
+### Mirror: Provider Version Metadata
+
+```
+GET /opendepot/providers/mirror/v1/{namespace}/{hostname}/{providerNamespace}/{type}/{version}.json
+```
+
+Returns archive URLs and checksums for all OS/architecture combinations of a specific provider version. Requires authentication when anonymous mode is disabled.
+
+**Path Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `namespace` | Kubernetes namespace of the Provider resource |
+| `hostname` | Origin registry hostname (currently only `registry.opentofu.org` is supported) |
+| `providerNamespace` | Provider namespace at the origin (e.g., `hashicorp`) |
+| `type` | Provider name |
+| `version` | Semver version string (without leading `v`) |
+
+**Response:**
+
+```json
+{
+  "archives": {
+    "linux_amd64": {
+      "url": "5.80.0/linux/amd64/terraform-provider-aws_5.80.0_linux_amd64.zip",
+      "hashes": ["zh:abc123..."]
+    },
+    "linux_arm64": {
+      "url": "5.80.0/linux/arm64/terraform-provider-aws_5.80.0_linux_arm64.zip",
+      "hashes": ["zh:def456..."]
+    }
+  }
+}
+```
+
+The `url` field is a relative path from the mirror base URL. The `hashes` array uses the `zh:` prefix for packed ZIP checksums as required by the Network Mirror Protocol.
+
+### Mirror: Provider Archive Download
+
+```
+GET /opendepot/providers/mirror/v1/{namespace}/{hostname}/{providerNamespace}/{type}/{version}/{os}/{arch}/{filename}
+```
+
+Streams the provider binary archive (`.zip`) directly from storage. Does **not** require client authentication when using anonymous mirror access — the server uses its own ServiceAccount. Archive URLs are discovered via the version metadata endpoint above.
+
 ## Browse API
 
 The browse endpoints power the [Registry Explorer UI](../guides/registry-explorer.md) and can also be called directly. All endpoints are accessible without authentication; providing an `Authorization: Bearer <token>` header extends visibility per the [browse visibility rules](../guides/registry-explorer.md#browse-visibility-rules).

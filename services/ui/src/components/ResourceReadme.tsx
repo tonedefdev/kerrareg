@@ -13,7 +13,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { Highlight, type Language, themes } from "prism-react-renderer";
 import Prism from "prismjs";
 import "prismjs/components/prism-hcl";
-import { buildModuleSource, buildProviderSource } from "@/lib/registrySource";
+import { buildCanonicalProviderSource, buildModuleSource } from "@/lib/registrySource";
 
 // Make prism-react-renderer use the full prismjs instance so it picks up the
 // HCL grammar we registered above via the side-effectful import (mirrors
@@ -64,9 +64,11 @@ interface ResourceReadmeProps {
   provider?: string;
   /** Host + port derived from NEXT_PUBLIC_BASE_URL (e.g. "opendepot.localtest.me:8080"). */
   registryHost: string;
+  /** Provider only — canonical upstream namespace (e.g. "hashicorp"). */
+  providerNamespace?: string;
 }
 
-export default function ResourceReadme({ content, kind, namespace, name, provider, registryHost }: ResourceReadmeProps) {
+export default function ResourceReadme({ content, kind, namespace, name, provider, registryHost, providerNamespace = "hashicorp" }: ResourceReadmeProps) {
   const { mode, systemMode } = useColorScheme();
   const resolvedMode = mode === "system" ? systemMode : mode;
   const codeBg = resolvedMode === "light" ? "#f0f7ff" : "#1e1e1e";
@@ -78,7 +80,7 @@ export default function ResourceReadme({ content, kind, namespace, name, provide
 
   const registrySource =
     kind === "provider"
-      ? buildProviderSource(registryHost, namespace, name)
+      ? buildCanonicalProviderSource(providerNamespace, name)
       : buildModuleSource(registryHost, namespace, name, provider);
   const rewrittenContent = React.useMemo(
     () => rewriteSource(content, registrySource),

@@ -178,6 +178,7 @@ export default async function ResourceDetailPage({ params }: PageProps) {
 
   const rawBase = process.env.NEXT_PUBLIC_BASE_URL ?? "";
   const registryHost = rawBase ? new URL(rawBase).host : "your-opendepot-host";
+  const registryBaseUrl = rawBase || "https://your-opendepot-host";
 
   return (
     <Container maxWidth="xl" sx={{ py: 4, px: { xs: 2, md: 4 } }}>
@@ -339,6 +340,7 @@ export default async function ResourceDetailPage({ params }: PageProps) {
             name={detail.name}
             provider={detail.provider}
             registryHost={registryHost}
+            providerNamespace={detail.providerNamespace}
           />
         </SectionCard>
       )}
@@ -353,6 +355,8 @@ export default async function ResourceDetailPage({ params }: PageProps) {
           latestVersion={detail.latestVersion}
           versionConstraints={detail.versionConstraints}
           registryHost={registryHost}
+          registryBaseUrl={registryBaseUrl}
+          providerNamespace={detail.providerNamespace}
         />
       </SectionCard>
 
