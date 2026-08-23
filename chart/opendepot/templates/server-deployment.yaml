@@ -129,6 +129,29 @@ spec:
         - name: http
           containerPort: {{ .Values.server.service.targetPort }}
           protocol: TCP
+        startupProbe:
+          httpGet:
+            path: /.well-known/terraform.json
+            port: http
+            scheme: {{ ternary "HTTPS" "HTTP" .Values.server.tls.enabled }}
+          periodSeconds: 2
+          failureThreshold: 45
+        readinessProbe:
+          httpGet:
+            path: /.well-known/terraform.json
+            port: http
+            scheme: {{ ternary "HTTPS" "HTTP" .Values.server.tls.enabled }}
+          periodSeconds: 5
+          timeoutSeconds: 2
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /.well-known/terraform.json
+            port: http
+            scheme: {{ ternary "HTTPS" "HTTP" .Values.server.tls.enabled }}
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 3
         securityContext:
           allowPrivilegeEscalation: false
           {{- if and (not .Values.global.developmentMode) (not .Values.storage.filesystem.enabled) }}

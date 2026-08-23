@@ -231,7 +231,7 @@ Download statistics are persisted in a bundled [Valkey](https://valkey.io/) (Red
 | `valkey.dataStorage.requestedSize` | string | PVC storage size. Default: `1Gi` |
 | `valkey.auth.enabled` | bool | Enable Valkey ACL password authentication. Required outside development mode. Default: `true` |
 | `valkey.auth.usersExistingSecret` | string | Name of a pre-existing Secret whose keys are ACL usernames and values are plaintext passwords. Default: `"opendepot-valkey-auth"` |
-| `valkey.auth.aclUsers.default.permissions` | string | ACL permissions string for the default user. The default is scoped to `stats:*` keys and the exact commands used by the server (e.g. `~stats:* &* -@all +HSET +HINCRBY +HGET +HGETALL +INCR +GET +ZINCRBY +ZREVRANGEBYSCORE +ZREVRANGE +EXPIREAT`). Do not widen to `+@all` in production. |
+| `valkey.auth.aclUsers.default.permissions` | string | ACL permissions string for the default user. The default is scoped to `stats:*` keys and the exact commands used by the server, including `PING` for its startup connection check (e.g. `~stats:* &* -@all +PING +HSET +HINCRBY +HGET +HGETALL +INCR +GET +ZINCRBY +ZREVRANGEBYSCORE +ZREVRANGE +EXPIREAT`). Do not widen to `+@all` in production. |
 | `server.stats.valkeyPasswordSecretName` | string | Name of the Secret injected as `OPENDEPOT_VALKEY_PASSWORD` into the server pod. Must match `valkey.auth.usersExistingSecret`. Default: `"opendepot-valkey-auth"` |
 | `valkey.nodeSelector` | map | Node selector for the Valkey pod |
 | `valkey.tolerations` | list | Tolerations for the Valkey pod |

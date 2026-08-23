@@ -450,7 +450,7 @@ valkey:
         # Minimal ACL: access only stats:* keys, deny all commands except those
         # used by the server stats subsystem. Operators MUST use this default
         # unless they have a specific requirement for broader access.
-        permissions: "~stats:* &* -@all +HSET +HINCRBY +HGET +HGETALL +INCR +GET +ZINCRBY +ZREVRANGEBYSCORE +ZREVRANGE +EXPIREAT"
+        permissions: "~stats:* &* -@all +PING +HSET +HINCRBY +HGET +HGETALL +INCR +GET +ZINCRBY +ZREVRANGEBYSCORE +ZREVRANGE +EXPIREAT"
   dataStorage:
     enabled: true
     requestedSize: 1Gi
