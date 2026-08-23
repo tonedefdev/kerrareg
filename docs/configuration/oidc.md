@@ -140,10 +140,10 @@ Internally, the server still discovers Dex and fetches its JWKS via the in-clust
 This mode supports all three flows — `tofu login`'s authorization code and device code grants, and the [client credentials grant](#client-credentials-machine-to-machine) used by CI/CD — purely through the server's existing ingress.
 
 !!! note
-    `server.oidc.authzUrl` and `server.oidc.tokenUrl` are no longer necessary with `dexProxy.enabled: true`, since `login.v1` is populated directly from Dex's own (now-external) discovery document. They remain available as manual overrides for edge cases — see [Split-Network OIDC](#split-network-oidc-authzurl--tokenurl) below.
+    `server.oidc.authzUrl` and `server.oidc.tokenUrl` are no longer necessary with `dexProxy.enabled: true`, since `login.v1` is populated directly from Dex's own (now-external) discovery document. They remain available as manual overrides for edge cases — see [Split-Network OIDC](#split-network-oidc-authzurl-tokenurl) below.
 
 !!! warning "dex.enabled=true is required"
-    `dexProxy.enabled: true` only works with the bundled Dex subchart (`dex.enabled: true`). It has no effect — and the Helm render fails — if you point `server.oidc.issuerUrl` at an [external, shared Dex](#shared--external-dex-multi-tenant) instance instead.
+  `dexProxy.enabled: true` only works with the bundled Dex subchart. When using an [external, shared Dex](#shared-external-dex-multi-tenant), set both `dex.enabled` and `server.oidc.dexProxy.enabled` to `false`. Helm rejects an external Dex configuration when the proxy is enabled.
 
 ## Step 3: Apply the Helm Upgrade
 
@@ -276,7 +276,7 @@ Each OpenDepot release should use a distinct `server.oidc.clientId` registered i
 | `opendepot-team-a` | `team-a` | `opendepot-team-a` | `https://dex.defdev.io/dex` |
 | `opendepot-team-b` | `team-b` | `opendepot-team-b` | `https://dex.defdev.io/dex` |
 
-If the shared Dex is reachable in-cluster at a different address than external `tofu login` clients need, combine `issuerUrl` with `authzUrl` and `tokenUrl` as described in [Split-Network OIDC](#split-network-oidc-authzurl--tokenurl) above.
+If the shared Dex is reachable in-cluster at a different address than external `tofu login` clients need, combine `issuerUrl` with `authzUrl` and `tokenUrl` as described in [Split-Network OIDC](#split-network-oidc-authzurl-tokenurl) above.
 
 ## Step 5: Authenticate with `tofu login`
 
@@ -609,7 +609,7 @@ TOKEN=$(curl -s -X POST https://opendepot.example.com/dex/token \
   | jq -r '.access_token')
 ```
 
-The example above assumes `server.oidc.dexProxy.enabled: true`, so the token endpoint shares the main registry host. Against a [shared, externally exposed Dex](#shared--external-dex-multi-tenant), use that Dex's own hostname (e.g. `https://dex.defdev.io/dex/token`) instead.
+The example above assumes `server.oidc.dexProxy.enabled: true`, so the token endpoint shares the main registry host. Against a [shared, externally exposed Dex](#shared-external-dex-multi-tenant), use that Dex's own hostname (e.g. `https://dex.defdev.io/dex/token`) instead.
 
 Use the token in `.tofurc`:
 

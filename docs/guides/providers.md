@@ -164,8 +164,8 @@ For private or internal providers not mirrored from an upstream registry, OpenDe
 ```hcl
 terraform {
   required_providers {
-    custom_provider = {
-      source  = "opendepot.defdev.io/my-team/custom-provider"
+    customapi = {
+      source  = "opendepot.defdev.io/my-team/customapi"
       version = "~> 1.0"
     }
   }

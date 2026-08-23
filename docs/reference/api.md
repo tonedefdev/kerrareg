@@ -599,7 +599,7 @@ Returns a flat list of all visible `Depot` resources with their storage backend,
 GET /opendepot/ui/v1/depots/graph
 ```
 
-Returns a graph of all visible `Depot`, `Module`, and `Provider` resources with directed edges connecting each depot to its managed modules and providers. Used by the [Depots page](#depots-page) in the Registry Explorer UI to render the interactive relationship diagram.
+Returns a graph of all visible `Depot`, `Module`, and `Provider` resources with directed edges connecting each depot to its managed modules and providers. Used by the [Depots page](../guides/registry-explorer.md#depots-page) in the Registry Explorer UI to render the interactive relationship diagram.
 
 **Visibility:** same rules as [List Depots](#list-depots).
 

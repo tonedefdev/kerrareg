@@ -1,7 +1,7 @@
 ---
 description: "Use when: reviewing security of Go code, TypeScript/React UI, NGINX config, Helm charts, or Kubernetes manifests; running Trivy scans; validating OIDC or OAuth2 authentication flows; checking for secrets in code; auditing GroupBinding expressions; reviewing RBAC configurations; or approving/blocking a change on security grounds in the OpenDepot project."
 name: "OpenDepot Security Review"
-model: "Claude Sonnet 5 (copilot)"
+model: "GPT-5.6 Sol"
 tools: [read, search, execute, agent, todo, browser, github/issue_read, github/issue_write, github/list_issues, github/add_issue_comment]
 agents: ["OpenDepot Developer"]
 argument-hint: "Branch or set of files to security review"
