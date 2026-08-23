@@ -32,10 +32,16 @@ if ! kubectl get secret ui-session-secret --namespace "$namespace" >/dev/null 2>
     --namespace "$namespace" >/dev/null
 fi
 
-kubectl create secret generic ui-oidc-secret \
-  --from-literal=clientSecret=ui-local-test-secret \
-  --namespace "$namespace" \
-  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+if ! kubectl get secret ui-oidc-secret --namespace "$namespace" \
+  -o jsonpath='{.data.clientSecret}{" "}{.data.OPENDEPOT_UI_CLIENT_SECRET}' 2>/dev/null \
+  | grep -Eq '^[^ ]+ [^ ]+$'; then
+  ui_client_secret=$(openssl rand -base64 48)
+  kubectl create secret generic ui-oidc-secret \
+    --from-literal=clientSecret="$ui_client_secret" \
+    --from-literal=OPENDEPOT_UI_CLIENT_SECRET="$ui_client_secret" \
+    --namespace "$namespace" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+fi
 
 if ! kubectl get secret opendepot-provider-gpg --namespace "$namespace" >/dev/null 2>&1; then
   gpg_home=$(mktemp -d -t opendepot-gpg)

@@ -16,7 +16,7 @@ The security review runs two Trivy scans against every pull request:
 - `trivy image` — scans each built service image for OS package and Go module CVEs.
 - `trivy config` — scans the Helm chart templates for Kubernetes misconfigurations.
 
-OpenDepot bundles Trivy v0.72.0 in the `-scanning` image variant. The controller application binary itself is 0-CVE clean; HIGH CVEs reported against the embedded Trivy binary are tracked in [issue #65](https://github.com/tonedefdev/opendepot/issues/65) and suppressed via `.trivyignore` files at the repository root and at `chart/opendepot/.trivyignore`. When adding a new suppression, add it to both files and include the tracking issue URL as a comment.
+OpenDepot bundles Trivy v0.74.0 in the `-scanning` image variant. If an upstream Trivy release has a HIGH CVE with no available fix, track it in a GitHub issue before adding a suppression. Add any suppression to both the repository root and `chart/opendepot/.trivyignore`, and include the tracking issue URL as a comment.
 
 !!! note
     `.trivyignore` suppressions are scoped to the repository and apply only to findings in the embedded Trivy binary. CVEs in the controller's own dependencies must be resolved, not suppressed.

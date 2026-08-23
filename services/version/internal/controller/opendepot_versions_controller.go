@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -51,6 +52,8 @@ import (
 const (
 	opendepotControllerName = "opendepot-versions-controller"
 )
+
+var lookupProviderDownload = registry.LookupProviderDownload
 
 // VersionReconciler reconciles a Version object.
 type VersionReconciler struct {
@@ -799,13 +802,13 @@ func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *o
 	}
 
 	upstreamRegistry := opendepotv1alpha1.ProviderUpstreamRegistry(version.Spec.ProviderConfigRef)
-	download, err := registry.LookupProviderDownload(ctx, upstreamRegistry, providerNamespace, providerName, providerVersion,
+	download, err := lookupProviderDownload(ctx, upstreamRegistry, providerNamespace, providerName, providerVersion,
 		version.Spec.OperatingSystem, version.Spec.Architecture)
 	if err != nil {
 		return "", func() {}, nil, nil, err
 	}
 
-	r.Log.V(5).Info("provider download URL resolved; streaming archive", "version", version.Name, "upstreamRegistry", upstreamRegistry, "url", download.DownloadURL, "filename", download.Filename)
+	r.Log.V(5).Info("provider download resolved; streaming archive", "version", version.Name, "upstreamRegistry", upstreamRegistry, "filename", download.Filename)
 
 	tmpPath, checksumHex, cleanupFn, err := httpStreamToFile(ctx, download.DownloadURL)
 	if err != nil {
@@ -828,12 +831,15 @@ func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *o
 
 	fn := download.Filename
 	if fn == "" {
-		fn = path.Base(download.DownloadURL)
+		parsedDownloadURL, err := url.Parse(download.DownloadURL)
+		if err == nil {
+			fn = path.Base(parsedDownloadURL.Path)
+		}
 	}
 
 	if fn == "." || fn == "/" || fn == "" {
 		cleanupFn()
-		return "", func() {}, nil, nil, fmt.Errorf("unable to determine filename from provider download URL '%s'", download.DownloadURL)
+		return "", func() {}, nil, nil, fmt.Errorf("unable to determine filename from provider download URL '%s'", redactedURL(download.DownloadURL))
 	}
 
 	return tmpPath, cleanupFn, &checksumB64, &fn, nil
@@ -847,18 +853,18 @@ func (r *VersionReconciler) fetchProviderArchive(ctx context.Context, version *o
 func httpStreamToFile(ctx context.Context, requestURL string) (filePath string, checksumHex string, cleanup func(), err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
-		return "", "", func() {}, err
+		return "", "", func() {}, fmt.Errorf("invalid provider download URL '%s'", redactedURL(requestURL))
 	}
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", func() {}, fmt.Errorf("request failed for '%s': %w", requestURL, err)
+		return "", "", func() {}, fmt.Errorf("request failed for '%s'", redactedURL(requestURL))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", "", func() {}, fmt.Errorf("request to '%s' failed with status %d", requestURL, resp.StatusCode)
+		return "", "", func() {}, fmt.Errorf("request to '%s' failed with status %d", redactedURL(requestURL), resp.StatusCode)
 	}
 
 	f, err := os.CreateTemp("", "opendepot-provider-*.zip")
@@ -874,7 +880,7 @@ func httpStreamToFile(ctx context.Context, requestURL string) (filePath string, 
 	h := sha256.New()
 	if _, err = io.Copy(f, io.TeeReader(resp.Body, h)); err != nil {
 		cleanupFn()
-		return "", "", func() {}, fmt.Errorf("failed to stream provider archive from '%s': %w", requestURL, err)
+		return "", "", func() {}, fmt.Errorf("failed to stream provider archive from '%s': %w", redactedURL(requestURL), err)
 	}
 
 	if err = f.Sync(); err != nil {
@@ -883,6 +889,21 @@ func httpStreamToFile(ctx context.Context, requestURL string) (filePath string, 
 	}
 
 	return f.Name(), fmt.Sprintf("%x", h.Sum(nil)), cleanupFn, nil
+}
+
+func redactedURL(rawURL string) string {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "<invalid URL>"
+	}
+
+	parsedURL.User = nil
+	parsedURL.RawQuery = ""
+	parsedURL.ForceQuery = false
+	parsedURL.Fragment = ""
+	parsedURL.RawFragment = ""
+
+	return parsedURL.String()
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -18,6 +18,12 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
@@ -27,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	opendepotv1alpha1 "github.com/tonedefdev/opendepot/api/v1alpha1"
+	"github.com/tonedefdev/opendepot/pkg/registry"
 )
 
 var _ = Describe("Version Controller", func() {
@@ -136,6 +143,94 @@ var _ = Describe("Version Controller", func() {
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("moduleConfigRef is required"))
+		})
+	})
+
+	Context("Provider origins", func() {
+		It("redacts credentials from provider download errors", func() {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+			}))
+			DeferCleanup(server.Close)
+
+			requestURL := server.URL + "/provider.zip?X-Amz-Credential=secret#fragment"
+			_, _, cleanup, err := httpStreamToFile(ctx, requestURL)
+			DeferCleanup(cleanup)
+			Expect(err).To(MatchError(fmt.Sprintf("request to '%s/provider.zip' failed with status 403", server.URL)))
+			Expect(err.Error()).NotTo(ContainSubstring("secret"))
+			Expect(err.Error()).NotTo(ContainSubstring("X-Amz-Credential"))
+		})
+
+		It("redacts URL userinfo, query parameters, and fragments", func() {
+			Expect(redactedURL("https://user:password@example.com/provider.zip?token=secret#fragment")).To(
+				Equal("https://example.com/provider.zip"),
+			)
+			Expect(redactedURL("https://%zz")).To(Equal("<invalid URL>"))
+		})
+
+		It("uses the configured registry for provider archive lookup", func() {
+			archive := []byte("provider archive")
+			archiveSum := sha256.Sum256(archive)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write(archive)
+			}))
+			DeferCleanup(server.Close)
+
+			lookupProviderDownload = func(_ context.Context, registryHost, namespace, name, version, operatingSystem, architecture string) (*registry.ProviderDownload, error) {
+				Expect(registryHost).To(Equal(opendepotv1alpha1.TerraformRegistryHost))
+				Expect(namespace).To(Equal("hashicorp"))
+				Expect(name).To(Equal("null"))
+				Expect(version).To(Equal("3.2.4"))
+				Expect(operatingSystem).To(Equal("linux"))
+				Expect(architecture).To(Equal("arm64"))
+
+				return &registry.ProviderDownload{
+					DownloadURL: server.URL + "/terraform-provider-null.zip",
+					Filename:    "terraform-provider-null.zip",
+					Shasum:      hex.EncodeToString(archiveSum[:]),
+				}, nil
+			}
+			DeferCleanup(func() {
+				lookupProviderDownload = registry.LookupProviderDownload
+			})
+
+			providerName := "null"
+			upstreamRegistry := opendepotv1alpha1.TerraformRegistryHost
+			version := &opendepotv1alpha1.Version{Spec: opendepotv1alpha1.VersionSpec{
+				Version:         "3.2.4",
+				OperatingSystem: "linux",
+				Architecture:    "arm64",
+				ProviderConfigRef: &opendepotv1alpha1.ProviderConfig{
+					Name:             &providerName,
+					UpstreamRegistry: &upstreamRegistry,
+				},
+			}}
+			reconciler := &VersionReconciler{Log: logr.Discard()}
+			archivePath, cleanup, _, fileName, err := reconciler.fetchProviderArchive(ctx, version)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(cleanup)
+			Expect(fileName).NotTo(BeNil())
+			Expect(*fileName).To(Equal("terraform-provider-null.zip"))
+			Expect(os.ReadFile(archivePath)).To(Equal(archive))
+		})
+
+		It("skips the OpenTofu docs lookup for Terraform providers", func() {
+			lookupCalled := false
+			lookupProviderRepo = func(context.Context, string, string) (string, error) {
+				lookupCalled = true
+
+				return "https://github.com/wrong/repository", nil
+			}
+			DeferCleanup(func() {
+				lookupProviderRepo = registry.LookupProviderRepo
+			})
+
+			upstreamRegistry := opendepotv1alpha1.TerraformRegistryHost
+			repository := resolveProviderSourceRepository(ctx, "hashicorp", "null", &opendepotv1alpha1.ProviderConfig{
+				UpstreamRegistry: &upstreamRegistry,
+			})
+			Expect(lookupCalled).To(BeFalse())
+			Expect(repository).To(Equal("https://github.com/hashicorp/terraform-provider-null"))
 		})
 	})
 })

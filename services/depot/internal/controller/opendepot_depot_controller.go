@@ -38,6 +38,8 @@ import (
 	"github.com/tonedefdev/opendepot/pkg/registry"
 )
 
+var listProviderVersions = registry.ListProviderVersions
+
 // Depot reconciles a Depot object
 type DepotReconciler struct {
 	client.Client
@@ -256,7 +258,7 @@ func (r *DepotReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			}
 
 			upstreamRegistry := opendepotv1alpha1.ProviderUpstreamRegistry(&providerConfig)
-			allVersions, err := registry.ListProviderVersions(ctx, upstreamRegistry, ns, providerName)
+			allVersions, err := listProviderVersions(ctx, upstreamRegistry, ns, providerName)
 			if err != nil {
 				return ctrl.Result{}, err
 			}

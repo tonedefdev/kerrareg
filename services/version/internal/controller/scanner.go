@@ -37,6 +37,8 @@ import (
 	"github.com/tonedefdev/opendepot/pkg/registry"
 )
 
+var lookupProviderRepo = registry.LookupProviderRepo
+
 // trivyVulnerability is the subset of Trivy's per-vulnerability JSON output used here.
 type trivyVulnerability struct {
 	VulnerabilityID  string `json:"VulnerabilityID"`
@@ -158,7 +160,7 @@ func resolveProviderSourceRepository(ctx context.Context, namespace, providerNam
 	}
 
 	if opendepotv1alpha1.ProviderUpstreamRegistry(cfg) == opendepotv1alpha1.OpenTofuRegistryHost {
-		repoURL, err := registry.LookupProviderRepo(ctx, namespace, providerName)
+		repoURL, err := lookupProviderRepo(ctx, namespace, providerName)
 		if err == nil && repoURL != "" {
 			return repoURL
 		}

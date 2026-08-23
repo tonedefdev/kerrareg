@@ -55,12 +55,14 @@ rules:
   - patch
   - update
   - watch
+{{- if .Values.rbac.scopeToNamespace }}
 - apiGroups:
   - ""
   resources:
   - secrets
   verbs:
   - get
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: {{ if .Values.rbac.scopeToNamespace }}RoleBinding{{ else }}ClusterRoleBinding{{ end }}
@@ -77,4 +79,33 @@ subjects:
 - kind: ServiceAccount
   name: depot-controller
   namespace: {{ .Values.global.namespace }}
+{{- if not .Values.rbac.scopeToNamespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: depot-controller-secret-reader
+  namespace: {{ .Values.global.namespace }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: depot-controller-secret-reader
+  namespace: {{ .Values.global.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: depot-controller-secret-reader
+subjects:
+- kind: ServiceAccount
+  name: depot-controller
+  namespace: {{ .Values.global.namespace }}
+{{- end }}
 {{- end }}

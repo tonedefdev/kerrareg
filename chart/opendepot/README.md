@@ -218,7 +218,7 @@ OIDC authentication lets users run `tofu login` instead of distributing kubeconf
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `rbac.create` | `true` | Create `ClusterRole`/`ClusterRoleBinding` (or `Role`/`RoleBinding`) for each service |
-| `rbac.scopeToNamespace` | `false` | **Recommended for production: `true`**. Use namespace-scoped `Role`/`RoleBinding` instead of cluster-scoped. Also sets `WATCH_NAMESPACE` on controller deployments. Setting `true` constrains all RBAC permissions (including `secrets: [get]` for GitHub App auth) to the install namespace. |
+| `rbac.scopeToNamespace` | `false` | **Recommended for production: `true`**. Use namespace-scoped `Role`/`RoleBinding` instead of cluster-scoped for controller resources and set `WATCH_NAMESPACE` on controller deployments. Secret reads for GitHub App authentication are always granted separately in the install namespace. |
 
 ### Service Accounts
 
@@ -240,6 +240,10 @@ The filesystem storage backend uses a shared `PersistentVolumeClaim` (or a `host
 | `storage.filesystem.size` | `10Gi` | PVC storage request |
 
 When `hostPath` is set, an `initContainer` (`busybox:1.37`) runs as root to `chown` the mount point to UID `65532` before the main containers start.
+
+### Valkey
+
+The bundled statistics store defaults to `valkey/valkey:8-alpine`, the rolling Valkey 8 LTS Alpine variant. The Alpine image minimizes the operating-system package surface while retaining upstream security updates. ACL authentication is enabled by default and requires a pre-existing `opendepot-valkey-auth` Secret with a `default` password key. Custom Secret names must match in `valkey.auth.usersExistingSecret` and `server.stats.valkeyPasswordSecretName`.
 
 ### Scanning
 

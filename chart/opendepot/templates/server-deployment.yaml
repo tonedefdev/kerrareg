@@ -1,4 +1,18 @@
 {{- if .Values.server.enabled }}
+{{- if and (not .Values.global.developmentMode) (not .Values.valkey.auth.enabled) }}
+{{- fail "valkey.auth.enabled must be true outside global.developmentMode" }}
+{{- end }}
+{{- if .Values.valkey.auth.enabled }}
+{{- if not .Values.valkey.auth.usersExistingSecret }}
+{{- fail "valkey.auth.usersExistingSecret is required when valkey.auth.enabled=true" }}
+{{- end }}
+{{- if not .Values.server.stats.valkeyPasswordSecretName }}
+{{- fail "server.stats.valkeyPasswordSecretName is required when valkey.auth.enabled=true" }}
+{{- end }}
+{{- if ne .Values.valkey.auth.usersExistingSecret .Values.server.stats.valkeyPasswordSecretName }}
+{{- fail "valkey.auth.usersExistingSecret and server.stats.valkeyPasswordSecretName must match" }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -103,7 +117,7 @@ spec:
         - secretRef:
             name: {{ .Values.server.gpg.secretName }}
         {{- end }}
-        {{- if .Values.server.stats.valkeyPasswordSecretName }}
+        {{- if and .Values.valkey.auth.enabled .Values.server.stats.valkeyPasswordSecretName }}
         env:
         - name: OPENDEPOT_VALKEY_PASSWORD
           valueFrom:

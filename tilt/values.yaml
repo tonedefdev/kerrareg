@@ -45,7 +45,6 @@ server:
     enabled: true
     issuerUrl: http://opendepot.localtest.me:8080/dex
     clientId: opendepot
-    clientSecret: local-test-secret
     groupsClaim: groups
     dexProxy:
       enabled: true
@@ -56,6 +55,10 @@ server:
     istio:
       enabled: false
   tls:
+    enabled: false
+
+valkey:
+  auth:
     enabled: false
 
 storage:
@@ -83,13 +86,16 @@ ui:
     preserveHostPort: true
   oidc:
     enabled: true
-    issuerUrl: http://opendepot-dex.opendepot-system.svc.cluster.local:5556/dex
+    issuerUrl: http://opendepot.localtest.me:8080/dex
     authzUrl: http://opendepot.localtest.me:8080/dex/auth
     clientId: opendepot-ui
     clientSecretName: ui-oidc-secret
 
 dex:
   enabled: true
+  envFrom:
+    - secretRef:
+        name: ui-oidc-secret
   image:
     tag: v2.45.0
   config:
@@ -109,7 +115,7 @@ dex:
     staticClients:
       - id: opendepot-ui
         name: OpenDepot UI
-        secret: ui-local-test-secret
+        secretEnv: OPENDEPOT_UI_CLIENT_SECRET
         trustedPeers:
           - opendepot
         redirectURIs:

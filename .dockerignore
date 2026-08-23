@@ -1,0 +1,10 @@
+.git/
+**/bin/
+**/node_modules/
+**/.next/
+**/.yarn/cache/
+**/.yarn/unplugged/
+**/.env*.local
+**/*.tfstate
+**/*.tfstate.*
+site/

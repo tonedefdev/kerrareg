@@ -12,47 +12,10 @@
 # See chart/opendepot/values.yaml rbac.scopeToNamespace for guidance.
 KSV-0041
 
-# CVEs in embedded Trivy binary (/usr/local/bin/trivy) only.
-# The version-controller application binary itself is 0-CVE clean.
-# Trivy v0.72.0 is the latest upstream release as of 2026-07-11; no newer
-# version is available that resolves these dependencies.
-# These suppressions must be removed when a Trivy release ships with fixes for:
-#   - oras.land/oras-go/v2 >= 2.6.1, stdlib >= 1.25.12 / 1.26.5
-# Tracking: https://github.com/tonedefdev/opendepot/issues/65
-CVE-2026-50151
-CVE-2026-39822
-
-# ──────────────────────────────────────────────────────────
-# valkey/valkey:8 container image — OS-level packages
-# These packages are not invoked at runtime by Valkey and are
-# present only as transitive dependencies of the base OS layer.
-# Revisit when upstream fixes become available or the base image is updated.
-# Last reviewed: 2026-05-31
-# ──────────────────────────────────────────────────────────
-
-# perl-base — Heap buffer overflow compiling regex (no upstream fix as of 2026-05-31)
-# perl-base is not used by the Valkey binary at runtime.
-CVE-2026-8376
-
-# perl-base / Archive::Tar — symlink extraction path traversal (no upstream fix)
-CVE-2026-42496
-
-# perl-base / Archive::Tar — hardlink extraction path traversal (no upstream fix)
-CVE-2026-42497
-
-# perl-base / perl-IO-Compress — arbitrary code execution via output glob (no fix)
-CVE-2026-48962
-
-# perl-base — memory exhaustion in Archive::Tar (no upstream fix)
-CVE-2026-9538
-
-# libtinfo6 / ncurses — buffer overflow (no upstream fix as of 2026-05-31)
-# ncurses is not invoked by the Valkey binary; present in the Debian base image only.
-CVE-2025-69720
-
-# libcap2 — privilege escalation via TOCTOU race in cap_set_file() (fix exists in deb13u1)
-# A patched Debian package is available (1:2.75-10+deb13u1) but the valkey/valkey:8 image
-# has not yet been rebuilt with it. cap_set_file() is not called by the Valkey binary at
-# runtime. Suppression will be removed when the valkey:8 image is rebuilt.
-# Tracking: https://github.com/tonedefdev/opendepot/issues/68
-CVE-2026-4878
+# KSV-0109: ConfigMap with secrets
+#
+# The vendored Valkey chart stores an initialization shell script in a ConfigMap.
+# Trivy flags the script's local variable named "password", but no credential is
+# embedded in the ConfigMap. At runtime the script reads the value from the mounted
+# usersExistingSecret, hashes it, and writes the generated ACL file with mode 0400.
+KSV-0109

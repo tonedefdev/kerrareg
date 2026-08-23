@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	opendepotv1alpha1 "github.com/tonedefdev/opendepot/api/v1alpha1"
+	"github.com/tonedefdev/opendepot/pkg/registry"
 )
 
 var _ = Describe("Depot Controller", func() {
@@ -79,6 +80,50 @@ var _ = Describe("Depot Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		})
+
+		It("uses and preserves the configured provider upstream registry", func() {
+			providerName := "null"
+			providerNamespace := "hashicorp"
+			upstreamRegistry := opendepotv1alpha1.TerraformRegistryHost
+			listProviderVersions = func(_ context.Context, registryHost, namespace, name string) ([]string, error) {
+				Expect(registryHost).To(Equal(opendepotv1alpha1.TerraformRegistryHost))
+				Expect(namespace).To(Equal(providerNamespace))
+				Expect(name).To(Equal(providerName))
+
+				return []string{"3.2.4"}, nil
+			}
+			DeferCleanup(func() {
+				listProviderVersions = registry.ListProviderVersions
+			})
+
+			current := &opendepotv1alpha1.Depot{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, current)).To(Succeed())
+			current.Spec.ProviderConfigs = []opendepotv1alpha1.ProviderConfig{{
+				Name:               &providerName,
+				Namespace:          &providerNamespace,
+				UpstreamRegistry:   &upstreamRegistry,
+				OperatingSystems:   []string{"linux"},
+				Architectures:      []string{"amd64"},
+				VersionConstraints: ">= 3.0.0",
+			}}
+			Expect(k8sClient.Update(ctx, current)).To(Succeed())
+
+			controllerReconciler := &DepotReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			provider := &opendepotv1alpha1.Provider{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: providerName, Namespace: "default"}, provider)).To(Succeed())
+			Expect(provider.Spec.ProviderConfig.UpstreamRegistry).NotTo(BeNil())
+			Expect(*provider.Spec.ProviderConfig.UpstreamRegistry).To(Equal(opendepotv1alpha1.TerraformRegistryHost))
+			Expect(provider.Spec.Versions).To(Equal([]opendepotv1alpha1.ProviderVersion{{Version: "3.2.4"}}))
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, provider)
+			})
 		})
 	})
 })

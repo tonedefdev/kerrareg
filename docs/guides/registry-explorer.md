@@ -462,7 +462,13 @@ Summary counts (modules, providers, versions, sync health, security posture, sto
 
 ## Download Tracking
 
-Download events are recorded automatically in the bundled Valkey instance that is deployed alongside the server. No extra configuration is required to enable tracking.
+Download events are recorded automatically in the bundled Valkey instance that is deployed alongside the server. Before installation, create the required ACL Secret:
+
+```bash
+kubectl create secret generic opendepot-valkey-auth \
+  --from-literal=default="$(openssl rand -base64 32)" \
+  --namespace opendepot-system
+```
 
 By default, Valkey persists data to a PVC so stats survive pod restarts. For local development or Kind clusters without a StorageClass, disable persistence in your Helm values:
 

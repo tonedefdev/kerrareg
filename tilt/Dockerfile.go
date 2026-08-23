@@ -1,27 +1,6 @@
-FROM aquasec/trivy:0.72.0 AS trivy-source
+FROM aquasec/trivy:0.74.0 AS trivy-source
 
-FROM debian:bookworm-slim AS tofu-source
-ARG TARGETARCH
-ARG TOFU_VERSION=1.10.6
-ARG TOFU_SHA256_AMD64=15b7bed76420b50da3e121769c43341df8cd57d751ca14e6dbe9c850124c6dac
-ARG TOFU_SHA256_ARM64=a32f653d686a8cad9b9be82101eb5b5e834fbfa8d095842fa1820c5d27fad967
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
-    && rm -rf /var/lib/apt/lists/*
-RUN set -eux; \
-    arch="${TARGETARCH:-amd64}"; \
-    case "$arch" in \
-      amd64) sha="$TOFU_SHA256_AMD64" ;; \
-      arm64) sha="$TOFU_SHA256_ARM64" ;; \
-      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /tmp/tofu.zip \
-      "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_${arch}.zip"; \
-    echo "${sha}  /tmp/tofu.zip" | sha256sum -c -; \
-    unzip -o /tmp/tofu.zip tofu -d /usr/local/bin; \
-    chmod 0755 /usr/local/bin/tofu
-
-FROM golang:1.25 AS server-runtime
+FROM golang:1.25.13 AS server-runtime
 WORKDIR /workspace
 COPY api/v1alpha1/go.mod api/v1alpha1/go.sum api/v1alpha1/
 COPY pkg/storage/go.mod pkg/storage/go.sum pkg/storage/
@@ -35,11 +14,10 @@ COPY pkg/utils/ pkg/utils/
 COPY services/server/ services/server/
 RUN cd services/server && CGO_ENABLED=0 go build -o /workspace/bin/server . \
   && chown -R 65532:65532 /workspace
-COPY --from=tofu-source /usr/local/bin/tofu /usr/local/bin/tofu
 ENV GOCACHE=/workspace/.cache/go-build
 USER 65532:65532
 
-FROM golang:1.25 AS depot-runtime
+FROM golang:1.25.13 AS depot-runtime
 WORKDIR /workspace
 COPY api/v1alpha1/go.mod api/v1alpha1/go.sum api/v1alpha1/
 COPY pkg/github/go.mod pkg/github/go.sum pkg/github/
@@ -56,7 +34,7 @@ RUN cd services/depot && CGO_ENABLED=0 go build -o /workspace/bin/depot-controll
 ENV GOCACHE=/workspace/.cache/go-build
 USER 65532:65532
 
-FROM golang:1.25 AS module-runtime
+FROM golang:1.25.13 AS module-runtime
 WORKDIR /workspace
 COPY api/v1alpha1/go.mod api/v1alpha1/go.sum api/v1alpha1/
 COPY pkg/utils/go.mod pkg/utils/go.sum pkg/utils/
@@ -71,7 +49,7 @@ RUN cd services/module && CGO_ENABLED=0 go build -o /workspace/bin/module-contro
 ENV GOCACHE=/workspace/.cache/go-build
 USER 65532:65532
 
-FROM golang:1.25 AS provider-runtime
+FROM golang:1.25.13 AS provider-runtime
 WORKDIR /workspace
 COPY api/v1alpha1/go.mod api/v1alpha1/go.sum api/v1alpha1/
 COPY pkg/utils/go.mod pkg/utils/go.sum pkg/utils/
@@ -86,7 +64,7 @@ RUN cd services/provider && CGO_ENABLED=0 go build -o /workspace/bin/provider-co
 ENV GOCACHE=/workspace/.cache/go-build
 USER 65532:65532
 
-FROM golang:1.25 AS version-runtime
+FROM golang:1.25.13 AS version-runtime
 WORKDIR /workspace
 COPY api/v1alpha1/go.mod api/v1alpha1/go.sum api/v1alpha1/
 COPY pkg/github/go.mod pkg/github/go.sum pkg/github/
@@ -110,5 +88,4 @@ USER 65532:65532
 FROM version-runtime AS version-dev
 USER 0
 COPY --from=trivy-source /usr/local/bin/trivy /usr/local/bin/trivy
-COPY --from=tofu-source /usr/local/bin/tofu /usr/local/bin/tofu
 USER 65532:65532

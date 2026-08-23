@@ -59,8 +59,9 @@ rbac:
 When enabled, the chart creates `Role`/`RoleBinding` objects instead. This:
 
 - Limits all controller permissions to the install namespace (`global.namespace`).
-- Eliminates the KSV-0041 finding for secrets access in a `ClusterRole` — the `secrets: [get]` permission required for GitHub App authentication is always a named-object lookup, not a cluster-wide read.
 - Reduces blast radius if a controller is compromised.
+
+The `secrets: [get]` permission required for GitHub App authentication is always granted through dedicated namespace-scoped `Role` objects, regardless of `rbac.scopeToNamespace`. Controller `ClusterRole` objects never grant Secret access.
 
 !!! warning
     `rbac.scopeToNamespace: true` requires all `Module`, `Provider`, `Version`, and `Depot` resources to reside in the same namespace as the controllers. Do not enable this if your resources span multiple namespaces.
