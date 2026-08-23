@@ -143,9 +143,13 @@ tilt trigger refresh-trivy-db
 
 # Start the trusted HTTPS proxy used for manual provider mirror tests
 tilt trigger provider-mirror-tls
+
+# Remove unused OpenDepot images created by Tilt
+tilt trigger cleanup-images
 ```
 
 The Trivy database is seeded automatically after the version controller becomes ready.
+The image cleanup control removes stale OpenDepot Tilt images from host Docker and the dedicated Kind node. Images used by current Kubernetes pods or Docker containers, images from other projects, volumes, the Kind cluster, and the local registry are preserved.
 
 ### Provider Network Mirror
 
@@ -290,6 +294,15 @@ tilt/scripts/reset-cluster.sh
 ```
 
 After a reset, start the environment again with `tilt/scripts/up.sh`. The launcher regenerates the namespace, secrets, and local Dex configuration.
+
+Tilt image tags also accumulate in the local registry. To clear the registry and recreate the Kind image store, stop Tilt, remove its deployed resources, and run the full image cleanup:
+
+```bash
+tilt down
+tilt/scripts/cleanup-images.sh --all
+```
+
+Full cleanup refuses to run while Tilt or OpenDepot workloads are active. It recreates `kind-opendepot` and `opendepot-registry`, so the next `tilt/scripts/up.sh` run rebuilds and pulls the required images. Preview either mode without changing Docker resources by adding `--dry-run`.
 
 ---
 

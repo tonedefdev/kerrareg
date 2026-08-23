@@ -318,6 +318,7 @@ The Tilt dashboard exposes these controls, which are also available from the com
 | `tilt trigger clear-sample-resources` | Remove the sample resources |
 | `tilt trigger refresh-trivy-db` | Refresh the Trivy vulnerability database |
 | `tilt trigger provider-mirror-tls` | Start the trusted provider mirror HTTPS proxy |
+| `tilt trigger cleanup-images` | Remove unused OpenDepot images created by Tilt |
 
 Go source changes are synced into the corresponding running container, rebuilt, and restarted without replacing the pod. UI changes under `services/ui/src/` and `services/ui/public/` use Next.js hot module replacement.
 
@@ -336,5 +337,7 @@ tilt/scripts/reset-cluster.sh
 ```
 
 After a reset, start the environment again with `tilt/scripts/up.sh`.
+
+If Tilt images are consuming significant disk space, use `tilt trigger cleanup-images` to remove stale images from host Docker and the Kind node while preserving images used by current pods and Docker containers. To also clear the local registry, stop Tilt, run `tilt down`, and then run `tilt/scripts/cleanup-images.sh --all`. The full cleanup recreates the local cluster and registry, so the next startup rebuilds the application images.
 
 See [Contributing](../contributing.md) for live-update details and the end-to-end test workflow.

@@ -253,6 +253,12 @@ local_resource(
     labels=['controls'],
 )
 local_resource(
+    'cleanup-images',
+    cmd='tilt/scripts/cleanup-images.sh',
+    auto_init=False,
+    labels=['controls'],
+)
+local_resource(
     'reset-cluster',
     cmd='tilt/scripts/reset-cluster.sh',
     auto_init=False,
