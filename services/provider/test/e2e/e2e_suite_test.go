@@ -193,6 +193,10 @@ var _ = BeforeSuite(func() {
 	cmd = exec.Command("kubectl", "create", "namespace", namespace)
 	_, _ = utils.Run(cmd) // ignore error if namespace already exists
 
+	By("creating the Valkey authentication secret")
+	err = utils.EnsureValkeyAuthSecret(namespace)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to create Valkey authentication secret")
+
 	By("creating GPG secret in cluster")
 	cmd = exec.Command("kubectl", "create", "secret", "generic", gpgSecretName,
 		"--namespace", namespace,

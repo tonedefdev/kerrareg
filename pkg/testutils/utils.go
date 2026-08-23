@@ -98,6 +98,19 @@ func LoadImageToKindClusterWithName(name string) error {
 	return err
 }
 
+// EnsureValkeyAuthSecret creates the Secret required by the chart's secure
+// Valkey defaults. E2e clusters use a fixed, non-production test password.
+func EnsureValkeyAuthSecret(namespace string) error {
+	cmd := exec.Command(
+		"kubectl", "create", "secret", "generic", "opendepot-valkey-auth",
+		"--namespace", namespace,
+		"--from-literal=default=opendepot-e2e-valkey-password",
+	)
+	_, err := Run(cmd)
+
+	return err
+}
+
 // GetNonEmptyLines converts given command output string into individual objects
 // according to line breakers, and ignores the empty elements in it.
 func GetNonEmptyLines(output string) []string {
