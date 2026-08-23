@@ -49,7 +49,7 @@ The server is read-only by design, and Kubernetes RBAC remains the authorization
 
     ---
 
-    The Depot controller queries the GitHub Releases API for modules and the HashiCorp Releases API for providers, resolves your version constraints, and creates resources automatically.
+    The Depot controller queries the GitHub Releases API for modules and the configured OpenTofu or Terraform Registry for providers, resolves your version constraints, and creates resources automatically.
 
 - :material-lock-check: &nbsp;__Tamper-Resistant Checksums__
 
@@ -67,7 +67,7 @@ The server is read-only by design, and Kubernetes RBAC remains the authorization
 
     ---
 
-    Enable pre-signed URL redirects so OpenTofu fetches provider binaries directly from S3, GCS, or Azure Blob — no bandwidth through the server, no extra hops, no infrastructure bottleneck.
+    Enable pre-signed URL redirects so OpenTofu and Terraform fetch provider binaries directly from S3, GCS, or Azure Blob — no bandwidth through the server, no extra hops, no infrastructure bottleneck.
 
 </div>
 
@@ -81,7 +81,7 @@ The server is read-only by design, and Kubernetes RBAC remains the authorization
 | **Deployment**           | Helm chart, K8s-native  | SaaS / Enterprise on-prem  | Docker/K8s/VM             | SaaS or self-hosted      | Docker/K8s                  | Docker/K8s                        |
 | **Self-healing**         | Yes (controller loop)   | Partial (SaaS-managed)     | No                        | No                       | No                          | No                                |
 | **Multi-cloud Storage**  | S3, Azure, GCS, FS      | SaaS-managed               | S3, Azure, GCS            | S3, GCS, Filesystem      | S3, GCS, Azure, Filesystem  | S3, GCS, Filesystem               |
-| **Version Discovery**    | Automatic (GitHub/HC)   | VCS-connected/manual       | Manual upload/API         | Manual/CI                | Manual/CI                   | Manual upload                     |
+| **Version Discovery**    | Automatic (GitHub/upstream registry) | VCS-connected/manual | Manual upload/API         | Manual/CI                | Manual/CI                   | Manual upload                     |
 | **Immutability**         | Checksum every reconcile| At upload only             | Repo-level flag           | At upload only           | At upload only              | At upload only                    |
 | **Air-gapped Support**   | Yes (FS + PVC)          | Enterprise only            | Yes                       | Yes                      | Yes                         | Yes                               |
 | **Vuln Scanning**        | Built-in (Trivy)        | No                         | Paid add-on (Xray)        | No                       | No                          | No                                |
@@ -115,7 +115,7 @@ graph TD
     Storage[("Storage Backend\nS3 · Azure · GCS · Filesystem")]
 
     GitHub["GitHub\nReleases API"]
-    HashiCorp["HashiCorp\nReleases API"]
+    ProviderRegistry["Upstream Provider Registry\nOpenTofu · Terraform"]
 
     CLI -->|"tofu login (authz / device code)"| Dex
     Dex -->|"federates auth"| IdP
@@ -125,7 +125,7 @@ graph TD
     Server -->|"reads Module + Provider"| Module & Provider
 
     Depot -->|queries| GitHub
-    Depot -->|queries| HashiCorp
+    Depot -->|queries| ProviderRegistry
     Depot -->|creates / updates| SyncBus
     SyncBus --> Module
     SyncBus --> Provider
@@ -134,7 +134,7 @@ graph TD
     Provider -->|creates Version resources| Version
 
     Version -->|fetches archives| GitHub
-    Version -->|fetches binaries| HashiCorp
+    Version -->|fetches binaries| ProviderRegistry
     Version -->|uploads to| Storage
 
     classDef hidden fill:none,stroke:none,color:transparent;

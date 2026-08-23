@@ -155,7 +155,7 @@ The controller bypasses the provider fast-path, re-downloads the artifact, runs 
 
 ### Provider source repository
 
-OpenDepot automatically resolves the provider's GitHub repository for source scanning using the OpenTofu registry (`api.opentofu.org`). This works for any provider published in the registry regardless of its owning organization.
+For providers from `registry.opentofu.org`, OpenDepot automatically resolves the provider's GitHub repository for source scanning through `api.opentofu.org`. For providers from `registry.terraform.io`, it constructs `https://github.com/{namespace}/terraform-provider-{name}` because the Terraform Registry API does not expose equivalent source metadata.
 
 For providers not published under the `hashicorp` organization, set the `namespace` field to match the registry namespace:
 
@@ -166,7 +166,7 @@ spec:
     namespace: integrations
 ```
 
-Use `sourceRepository` to pin a specific URL when the registry lookup returns the wrong repository or is unreachable:
+Use `sourceRepository` to pin a specific URL when registry metadata is unavailable, the heuristic does not match the provider repository, or the lookup returns the wrong repository:
 
 ```yaml
 spec:

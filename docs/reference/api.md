@@ -222,7 +222,7 @@ Returns the download URL, SHA256 checksum, and GPG signing key for a specific pr
 GET /opendepot/providers/v1/download/{namespace}/{type}/{version}
 ```
 
-Streams the provider binary archive (`.zip`) directly from storage. Does **not** require client authentication — the server uses its own ServiceAccount per the Terraform Provider Registry Protocol.
+Streams the provider binary archive (`.zip`) directly from storage. Does **not** require client authentication — the server uses its own ServiceAccount per the Terraform Provider Registry Protocol, which both OpenTofu and Terraform implement.
 
 ## Provider SHA256SUMS
 
@@ -754,7 +754,7 @@ Holds Trivy source scan results. Used for both provider `go.mod` dependency scan
 |---|---|---|
 | `namespace` | `string` | The organisation namespace in the upstream registry (e.g. `hashicorp`, `integrations`, `DataDog`). Defaults to `hashicorp`. Used for binary download and source repository lookup. Existing `Provider` resources without this field continue to work unchanged. |
 | `upstreamRegistry` | `string` | The canonical registry used to discover and download this provider. Controls upstream version discovery, archive acquisition, and the canonical provider identity exposed via the Network Mirror Protocol and UI snippets. Allowed values: `registry.opentofu.org`, `registry.terraform.io`. Defaults to `registry.opentofu.org` when omitted. Providers from different origins with the same namespace/type should be placed in separate Kubernetes namespaces to avoid Version resource-name collisions. See [Consuming Providers](../guides/providers.md) for examples. |
-| `sourceRepository` | `string` | Full GitHub URL of the provider's source repository (e.g. `https://github.com/hashicorp/terraform-provider-aws`). When omitted, OpenDepot queries the upstream registry API for the repository URL, falling back to `https://github.com/{namespace}/terraform-provider-{name}` if the registry lookup fails. Set this field to override an incorrect or unavailable registry result. |
+| `sourceRepository` | `string` | Full GitHub URL of the provider's source repository (e.g. `https://github.com/hashicorp/terraform-provider-aws`). When omitted for an OpenTofu Registry provider, OpenDepot queries `api.opentofu.org` and falls back to `https://github.com/{namespace}/terraform-provider-{name}` if the lookup fails. Terraform Registry providers use the fallback directly because that registry does not expose equivalent source metadata. Set this field to override an incorrect or unavailable result. |
 
 ### ReadmeConfigMapRef
 

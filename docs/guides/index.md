@@ -46,7 +46,7 @@ Guides for platform and infrastructure teams operating OpenDepot.
 
     ---
 
-    Automatically discover and sync module and provider versions from GitHub and HashiCorp without writing any `kubectl apply` commands or configuring direct pipeline authentication.
+    Automatically discover and sync module versions from GitHub and provider versions from the OpenTofu or Terraform Registry without writing any `kubectl apply` commands or configuring direct pipeline authentication.
 
 - :material-upload-circle: &nbsp;[__CI/CD Pipelines__](cicd.md)
 

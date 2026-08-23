@@ -19,7 +19,7 @@ OpenDepot integrates [Trivy](https://trivy.dev/) to scan both provider artifacts
 
 For each provider version, the Version controller performs two scans:
 
-- **Binary scan** — runs `trivy rootfs` against the compiled provider binary extracted from the HashiCorp release archive. Results are stored per `Version` resource in `Version.status.binaryScan` because each OS/architecture binary may embed different Go standard library versions or runtime dependencies. The binary is written with `0500` (execute) permissions before scanning; Trivy requires the execute bit to be set for gobinary detection — binaries without execute permission are silently skipped.
+- **Binary scan** — runs `trivy rootfs` against the compiled provider binary extracted from the upstream registry archive. Results are stored per `Version` resource in `Version.status.binaryScan` because each OS/architecture binary may embed different Go standard library versions or runtime dependencies. The binary is written with `0500` (execute) permissions before scanning; Trivy requires the execute bit to be set for gobinary detection — binaries without execute permission are silently skipped.
 - **Source scan** — fetches `go.mod` from the provider's GitHub repository and runs `trivy fs` to find vulnerable source dependencies. Results are stored on each `Version` resource in `Version.status.sourceScan`, deduplicated across OS/architecture variants of the same provider version since all variants share the same source code. When a provider repository has no `go.mod`, the scan completes with `findings: []` (an empty slice, not absent) — this is a tombstone indicating the version was scanned and nothing was found, as opposed to not yet scanned.
 
 !!! note
@@ -157,7 +157,7 @@ kubectl get provider <name> -n <namespace> \
 
 **`namespace` field**
 
-The `namespace` field on `ProviderConfig` controls which organisation is used in the OpenTofu lookup and the heuristic fallback. It defaults to `hashicorp`.
+The `namespace` field on `ProviderConfig` controls which organisation is used in upstream registry lookups and the heuristic fallback. It defaults to `hashicorp`.
 
 Set `namespace` when using a provider that is not published under the `hashicorp` organization:
 

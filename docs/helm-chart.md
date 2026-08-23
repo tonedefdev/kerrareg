@@ -166,7 +166,7 @@ These values apply to `version`, `module`, `depot`, and `provider` independently
 
 ## GPG Signing (Providers)
 
-The server signs `SHA256SUMS` files for provider packages using a GPG key you supply. OpenTofu verifies this signature as part of the [Provider Registry Protocol](https://developer.hashicorp.com/terraform/internals/provider-registry-protocol). See [GPG Signing for Providers](configuration/gpg.md) for full setup instructions.
+The server signs `SHA256SUMS` files for provider packages using a GPG key you supply. OpenTofu and Terraform verify this signature as part of the [Provider Registry Protocol](https://developer.hashicorp.com/terraform/internals/provider-registry-protocol). See [GPG Signing for Providers](configuration/gpg.md) for full setup instructions.
 
 | Value | Type | Description |
 |-------|------|-------------|
