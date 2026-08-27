@@ -17,15 +17,67 @@ Breaking changes and upgrade steps for each OpenDepot release. Check this page b
 
 ## v0.10.0
 
-v0.10.0 enables Valkey ACL authentication and the bundled Dex reverse proxy by default. Existing installations must create a Valkey password Secret and review their Dex exposure before upgrading.
+v0.10.0 enables Valkey ACL authentication and the bundled Dex reverse proxy by default. All existing installations must create a Valkey password Secret. Existing OIDC installations must also review their Dex configuration.
 
 ### Breaking Changes
 
 - **Valkey authentication is required outside development mode.** The chart rejects `valkey.auth.enabled: false` unless `global.developmentMode: true`.
 - **A pre-existing Secret is required.** The default configuration expects an `opendepot-valkey-auth` Secret with a `default` key in the OpenDepot namespace. The chart does not create this Secret.
 - **The Valkey and server Secret names must match.** If you use a custom Secret name, set both `valkey.auth.usersExistingSecret` and `server.stats.valkeyPasswordSecretName` to that name.
-- **The bundled Dex reverse proxy is enabled by default.** Bundled Dex deployments no longer require a separate public ingress or hostname. The server proxies `/dex/*` through the existing server or UI ingress.
-- **External or separately exposed Dex requires an explicit opt-out.** When OIDC is enabled, set `server.oidc.dexProxy.enabled: false` if `dex.enabled: false` or the OIDC issuer is managed outside this chart. OIDC-disabled installations require no override.
+
+### OIDC Default Change
+
+`server.oidc.dexProxy.enabled` now defaults to `true`. This hardens bundled Dex deployments by proxying `/dex/*` through the existing server or UI ingress, so Dex no longer requires a separate public ingress or hostname.
+
+This change does not affect installations with OIDC disabled. Existing OIDC installations require action in either of these cases:
+
+- **Bundled Dex with an internal or auto-derived issuer:** Set `server.oidc.issuerUrl` and `dex.config.issuer` to the same external, path-based URL served by the existing ingress, such as `https://opendepot.example.com/dex`.
+- **External or separately exposed Dex:** Set `server.oidc.dexProxy.enabled: false`. The bundled proxy cannot target an externally managed issuer.
+
+### Provider Upstream Registry Selection
+
+v0.10.0 adds `spec.providerConfig.upstreamRegistry` to `Provider` resources and `spec.providerConfigs[].upstreamRegistry` to `Depot` resources. The field selects the canonical registry used for provider discovery, downloads, Network Mirror identity, and Registry Explorer snippets.
+
+Supported values are:
+
+- `registry.opentofu.org` (default)
+- `registry.terraform.io`
+
+Existing resources require no changes. When the field is omitted, OpenDepot continues to use `registry.opentofu.org`, matching the behavior of earlier releases.
+
+Set the field explicitly to mirror a provider from the Terraform Registry:
+
+=== "Provider"
+
+      ```yaml
+      apiVersion: opendepot.defdev.io/v1alpha1
+      kind: Provider
+      metadata:
+         name: aws
+         namespace: opendepot-system
+      spec:
+         providerConfig:
+            name: aws
+            namespace: hashicorp
+            upstreamRegistry: registry.terraform.io
+      ```
+
+=== "Depot"
+
+      ```yaml
+      apiVersion: opendepot.defdev.io/v1alpha1
+      kind: Depot
+      metadata:
+         name: upstream-providers
+         namespace: opendepot-system
+      spec:
+         providerConfigs:
+            - name: aws
+               namespace: hashicorp
+               upstreamRegistry: registry.terraform.io
+      ```
+
+The provider retains its canonical source address, such as `registry.terraform.io/hashicorp/aws`. Configure the same hostname in the `network_mirror.include` and `direct.exclude` patterns in `.tofurc` or `.terraformrc`. See [Consuming Providers](guides/providers.md#default-workflow-network-mirror) for complete examples.
 
 ### Upgrade Steps
 
@@ -49,36 +101,36 @@ v0.10.0 enables Valkey ACL authentication and the bundled Dex reverse proxy by d
      stats:
        valkeyPasswordSecretName: my-valkey-auth
    ```
-4. Choose the appropriate Dex proxy configuration:
+4. If OIDC is enabled, choose the appropriate Dex configuration:
 
-    === "Bundled Dex"
+=== "Bundled Dex"
 
-          Set the same external, path-based issuer URL for the server and Dex:
+       Set the same external, path-based issuer URL for the server and Dex:
 
-          ```yaml
-          dex:
-             enabled: true
-             config:
-                issuer: https://opendepot.example.com/dex
+       ```yaml
+       dex:
+         enabled: true
+         config:
+           issuer: https://opendepot.example.com/dex
 
-          server:
-             oidc:
-                enabled: true
-                issuerUrl: https://opendepot.example.com/dex
-          ```
+       server:
+         oidc:
+           enabled: true
+           issuerUrl: https://opendepot.example.com/dex
+       ```
 
-          Expose `/dex` through the existing server or UI ingress. A separate Dex ingress is no longer required.
+       Expose `/dex` through the existing server or UI ingress. A separate Dex ingress is no longer required.
 
-   === "External or separately exposed Dex"
+=== "External or separately exposed Dex"
 
-          Disable the bundled proxy explicitly:
+      Disable the bundled proxy explicitly:
 
-          ```yaml
-          server:
-             oidc:
-                dexProxy:
-                   enabled: false
-          ```
+      ```yaml
+      server:
+      oidc:
+         dexProxy:
+            enabled: false
+      ```
 
 5. Upgrade the chart:
    ```bash
