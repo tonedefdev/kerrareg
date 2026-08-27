@@ -623,6 +623,8 @@ server:
   oidc:
     enabled: true
     clientSecret: %q
+		dexProxy:
+			enabled: false
 `, testUserEmail, passwordHash, testUserID, testClientSecret)
 
 			valuesFile := filepath.Join(GinkgoT().TempDir(), "dex-e2e-values.yaml")
@@ -1139,6 +1141,8 @@ server:
     enabled: true
     clientSecret: %q
     groupsClaim: email
+		dexProxy:
+			enabled: false
 `, gbTestUserEmail, passwordHash, gbTestUserID, gbTestClientSecret)
 
 			valuesFile := filepath.Join(GinkgoT().TempDir(), "gb-e2e-values.yaml")
@@ -1520,6 +1524,8 @@ server:
     enabled: true
     clientSecret: %q
     allowServiceAccountFallback: true
+		dexProxy:
+			enabled: false
 `, sfTestUserEmail, passwordHash, sfTestUserID, sfTestClientSecret)
 
 			valuesFile := filepath.Join(GinkgoT().TempDir(), "sf-dex-e2e-values.yaml")
@@ -1893,6 +1899,8 @@ server:
     enabled: true
     clientSecret: %q
     allowClientCredentials: true
+		dexProxy:
+			enabled: false
 `, ccUserEmail, passwordHash, ccUserID, ccClientID, ccTestClientSecret, ccOIDCClientSecret)
 
 			valuesFile := filepath.Join(GinkgoT().TempDir(), "cc-dex-e2e-values.yaml")
@@ -2961,6 +2969,8 @@ server:
     enabled: true
     clientSecret: %q
     groupsClaim: email
+		dexProxy:
+			enabled: false
 `, gbBrowseUserEmail, passwordHash, gbBrowseUserID, gbBrowseDexClientSecret)
 
 			valuesFile := filepath.Join(GinkgoT().TempDir(), "gb-browse-e2e-values.yaml")
