@@ -370,7 +370,7 @@ users:
 
 		// runTofuInit writes a main.tf referencing a (non-existent) module from
 		// the local port-forwarded server, writes rcContent as .tofurc, runs
-		// `tofu init -no-color`, and returns the combined stdout+stderr output.
+		// `tofu init -no-color`, and returns the combined stdout+stderr output and error.
 		// The module not existing is fine — auth failures surface before any
 		// module download is attempted.
 		//
@@ -379,7 +379,7 @@ users:
 		// so tofu reaches the port-forward tunnel on the test host without any
 		// in-cluster DNS configuration. The port goes only in the service URL
 		// inside the host block — not in the module source address.
-		runTofuInit := func(rcContent string) string {
+		runTofuInit := func(rcContent string) (string, error) {
 			workDir := GinkgoT().TempDir()
 			mainTF := fmt.Sprintf(`module "test" {
   source = "%s/%s/%s/%s"
@@ -393,9 +393,10 @@ users:
 			cmd := exec.Command(tofuBin, "init", "-no-color")
 			cmd.Dir = workDir
 			cmd.Env = append(os.Environ(), "TF_CLI_CONFIG_FILE="+rcFile)
-			output, _ := cmd.CombinedOutput()
+			output, err := cmd.CombinedOutput()
 			_, _ = fmt.Fprintf(GinkgoWriter, "tofu init output:\n%s\n", output)
-			return string(output)
+
+			return string(output), err
 		}
 
 		Context("anonymous auth over HTTP", Ordered, func() {
@@ -414,7 +415,7 @@ users:
 				stopPortForward(pfCancel)
 			})
 
-			It("tofu init without credentials must not fail with a 401", func() {
+			It("tofu init without credentials reaches the registry without an auth failure", func() {
 				// No credentials block — anonymous auth accepts unauthenticated requests.
 				rc := fmt.Sprintf(`host "%s" {
   services = {
@@ -422,11 +423,14 @@ users:
   }
 }
 `, tofuRegistryHost, tofuRegistryHost, serverLocalPort)
-				output := runTofuInit(rc)
-				Expect(output).NotTo(ContainSubstring("401"),
-					"anonymous auth must not produce a 401 during tofu init")
-				Expect(output).NotTo(ContainSubstring("missing Authorization header"),
-					"anonymous auth must not produce an auth error during tofu init")
+				output, err := runTofuInit(rc)
+				Expect(err).To(HaveOccurred(), "the deliberately nonexistent module must make tofu init fail")
+				Expect(output).To(ContainSubstring("Error: Module not found"),
+					"anonymous auth must reach the registry and report the missing module")
+				Expect(output).NotTo(
+					Or(ContainSubstring("401"), ContainSubstring("500 Internal Server Error")),
+					"anonymous auth must not produce an authentication or server error",
+				)
 			})
 		})
 
@@ -464,7 +468,8 @@ users:
   }
 }
 `, tofuRegistryHost, tofuRegistryHost, serverLocalPort)
-				output := runTofuInit(rc)
+				output, err := runTofuInit(rc)
+				Expect(err).To(HaveOccurred(), "tofu init must fail when credentials are missing")
 				Expect(output).To(
 					Or(ContainSubstring("401"), ContainSubstring("missing Authorization header")),
 					"tofu init without credentials must produce a 401 in bearer token mode",
@@ -478,24 +483,28 @@ users:
 				// "missing Authorization header" issue.
 				rc := fmt.Sprintf("host \"%s\" {\n  services = {\n    \"modules.v1\" = \"http://%s:%d/opendepot/modules/v1/\"\n  }\n  token = %q\n}\n",
 					tofuRegistryHost, tofuRegistryHost, serverLocalPort, bearerToken)
-				output := runTofuInit(rc)
+				output, err := runTofuInit(rc)
+				Expect(err).To(HaveOccurred(), "tofu init must fail when credentials are misplaced")
 				Expect(output).To(
 					Or(ContainSubstring("401"), ContainSubstring("missing Authorization header")),
 					"token inside host block must not be sent; server must return 401",
 				)
 			})
 
-			It("tofu init with token in a credentials block must not produce a 401", func() {
+			It("tofu init with token in a credentials block reaches the registry", func() {
 				// Correct configuration: `credentials` block keyed to the registry
 				// hostname, plus `host` block to configure the HTTP service URL.
 				// OpenTofu reads the `credentials` block and includes the token in
 				// the Authorization header for all requests to that hostname.
 				rc := fmt.Sprintf("credentials \"%s\" {\n  token = %q\n}\nhost \"%s\" {\n  services = {\n    \"modules.v1\" = \"http://%s:%d/opendepot/modules/v1/\"\n  }\n}\n",
 					tofuRegistryHost, bearerToken, tofuRegistryHost, tofuRegistryHost, serverLocalPort)
-				output := runTofuInit(rc)
+				output, err := runTofuInit(rc)
+				Expect(err).To(HaveOccurred(), "the deliberately nonexistent module must make tofu init fail")
+				Expect(output).To(ContainSubstring("Error: Module not found"),
+					"valid credentials must reach the registry and report the missing module")
 				Expect(output).NotTo(
-					Or(ContainSubstring("401"), ContainSubstring("missing Authorization header")),
-					"token in credentials block must be forwarded to the server; must not return 401",
+					Or(ContainSubstring("401"), ContainSubstring("500 Internal Server Error")),
+					"valid credentials must not produce an authentication or server error",
 				)
 			})
 		})
@@ -2782,9 +2791,8 @@ spec:
 			resp, err := http.Get(u)
 			Expect(err).NotTo(HaveOccurred())
 			defer resp.Body.Close()
-			// anonymous-auth mode: 404 or 200 are both acceptable; 401 is not.
-			Expect(resp.StatusCode).NotTo(Equal(http.StatusUnauthorized),
-				"module versions protocol endpoint must not return 401 in anonymous-auth mode")
+			Expect(resp.StatusCode).To(Equal(http.StatusNotFound),
+				"a non-existent module must return 404 from the module versions protocol endpoint")
 		})
 	})
 
