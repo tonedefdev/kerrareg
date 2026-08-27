@@ -4,6 +4,7 @@
 global:
   namespace: opendepot-system
   imagePullPolicy: IfNotPresent
+  developmentMode: false
   image:
     tag: ""  # Defaults to Chart.AppVersion when empty; set to override.
 
@@ -150,7 +151,7 @@ server:
     # verification_uri, etc.) use the external, proxied address because that is
     # Dex's configured issuer. See the OIDC configuration guide for setup.
     dexProxy:
-      enabled: false
+      enabled: true
   image:
     repository: ghcr.io/tonedefdev/opendepot/server
     tag: ""  # Overrides global.image.tag when set
@@ -185,8 +186,8 @@ server:
     # Name of a pre-existing Kubernetes Secret whose "default" key holds the Valkey ACL
     # password. Must match valkey.auth.usersExistingSecret. When set, the password is
     # injected into the server container via the OPENDEPOT_VALKEY_PASSWORD environment
-    # variable. Leave empty when valkey.auth.enabled=false.
-    valkeyPasswordSecretName: ""
+    # variable.
+    valkeyPasswordSecretName: "opendepot-valkey-auth"
   resources:
     requests:
       cpu: 100m
@@ -215,8 +216,7 @@ rbac:
   # When true, use namespace-scoped Role/RoleBinding instead of ClusterRole/ClusterRoleBinding.
   # Controllers will only watch resources in global.namespace.
   # RECOMMENDED for production: set to true to limit controller permissions to a single namespace.
-  # Using true also eliminates the KSV-0041 finding for secrets access in the ClusterRole
-  # (secrets: [get] is required for GitHub App authentication and is always a named-object lookup).
+  # Secret access is always granted separately through namespace-scoped Roles.
   scopeToNamespace: false
 
 ## Storage configuration
@@ -430,10 +430,10 @@ ui:
 ## Deployed via the official valkey-io/valkey-helm subchart when server.enabled=true.
 valkey:
   fullnameOverride: valkey  # Forces Service name to exactly "valkey" — do not change
-  # Pin to the Valkey 8 LTS tag. Tag "8" receives rolling security patches from
-  # the Valkey project and avoids unmitigated CVEs present in the 9.x branch.
+  # Pin to the Alpine variant of the Valkey 8 LTS tag. It receives rolling
+  # security patches without the vulnerable Debian util-linux package set.
   image:
-    tag: "8"
+    tag: "8-alpine"
   auth:
     # Set to true to require ACL password authentication.
     # Recommended for production environments (finance, banking, DoD, etc.).
@@ -441,16 +441,16 @@ valkey:
     # to the name of the same pre-existing Kubernetes Secret. Use External Secrets
     # Operator or HashiCorp Vault to provision the Secret rather than storing the
     # password in plain text.
-    enabled: false
+    enabled: true
     # Name of a pre-existing Secret whose keys are ACL usernames and values are passwords.
     # The Secret must contain at minimum: key "default" = <password>.
-    usersExistingSecret: ""
+    usersExistingSecret: "opendepot-valkey-auth"
     aclUsers:
       default:
         # Minimal ACL: access only stats:* keys, deny all commands except those
         # used by the server stats subsystem. Operators MUST use this default
         # unless they have a specific requirement for broader access.
-        permissions: "~stats:* &* -@all +HSET +HINCRBY +HGET +HGETALL +INCR +GET +ZINCRBY +ZREVRANGEBYSCORE +ZREVRANGE +EXPIREAT"
+        permissions: "~stats:* &* -@all +PING +HSET +HINCRBY +HGET +HGETALL +INCR +GET +ZINCRBY +ZREVRANGEBYSCORE +ZREVRANGE +EXPIREAT"
   dataStorage:
     enabled: true
     requestedSize: 1Gi

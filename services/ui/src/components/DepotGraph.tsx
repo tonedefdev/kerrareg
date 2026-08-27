@@ -58,6 +58,7 @@ interface NodeData {
   synced?: boolean;
   provider?: string;
   providerNamespace?: string;
+  upstreamRegistry?: string;
   storageBackend?: string;
   storageConfig?: BrowseStorageConfig;
   githubAuthenticated?: boolean;
@@ -334,6 +335,7 @@ function buildGraph(
         label: p.name,
         synced: p.synced,
         providerNamespace: p.providerNamespace,
+        upstreamRegistry: p.upstreamRegistry,
       },
     });
   });

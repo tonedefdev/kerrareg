@@ -178,6 +178,7 @@ export default async function ResourceDetailPage({ params }: PageProps) {
 
   const rawBase = process.env.NEXT_PUBLIC_BASE_URL ?? "";
   const registryHost = rawBase ? new URL(rawBase).host : "your-opendepot-host";
+  const registryBaseUrl = rawBase || "https://your-opendepot-host";
 
   return (
     <Container maxWidth="xl" sx={{ py: 4, px: { xs: 2, md: 4 } }}>
@@ -317,6 +318,9 @@ export default async function ResourceDetailPage({ params }: PageProps) {
           {isProviderKind && (
             <LabelValue label="Provider Namespace" value={detail.providerNamespace || "hashicorp"} />
           )}
+          {isProviderKind && (
+            <LabelValue label="Upstream Registry" value={detail.upstreamRegistry || "registry.opentofu.org"} />
+          )}
           <LabelValue label="Latest Version" value={detail.latestVersion ? displayVersion(detail.latestVersion) : undefined} />
           {detail.repoOwner && <LabelValue label="Repo Owner" value={detail.repoOwner} />}
           {detail.versionHistoryLimit !== undefined && detail.versionHistoryLimit > 0 && (
@@ -339,6 +343,8 @@ export default async function ResourceDetailPage({ params }: PageProps) {
             name={detail.name}
             provider={detail.provider}
             registryHost={registryHost}
+            providerNamespace={detail.providerNamespace}
+            upstreamRegistry={detail.upstreamRegistry}
           />
         </SectionCard>
       )}
@@ -353,6 +359,9 @@ export default async function ResourceDetailPage({ params }: PageProps) {
           latestVersion={detail.latestVersion}
           versionConstraints={detail.versionConstraints}
           registryHost={registryHost}
+          registryBaseUrl={registryBaseUrl}
+          providerNamespace={detail.providerNamespace}
+          upstreamRegistry={detail.upstreamRegistry}
         />
       </SectionCard>
 

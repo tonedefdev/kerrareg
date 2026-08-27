@@ -93,7 +93,7 @@ spec:
                     type: string
                   namespace:
                     description: |-
-                      The namespace (organization) of the provider in the OpenTofu registry,
+                      The namespace (organization) of the provider in the configured upstream registry,
                       e.g. 'hashicorp', 'integrations', 'DataDog'. Defaults to 'hashicorp' when omitted,
                       preserving backwards compatibility for existing Provider resources.
                     type: string
@@ -195,6 +195,15 @@ spec:
                         - region
                         type: object
                     type: object
+                  upstreamRegistry:
+                    default: registry.opentofu.org
+                    description: |-
+                      The canonical registry used to discover and download this provider and exposed by the Provider Network Mirror Protocol.
+                      Defaults to registry.opentofu.org when omitted.
+                    enum:
+                    - registry.opentofu.org
+                    - registry.terraform.io
+                    type: string
                   versionConstraints:
                     description: |-
                       A comma-separated list of version constraints such as

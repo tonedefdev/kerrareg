@@ -222,7 +222,7 @@ Returns the download URL, SHA256 checksum, and GPG signing key for a specific pr
 GET /opendepot/providers/v1/download/{namespace}/{type}/{version}
 ```
 
-Streams the provider binary archive (`.zip`) directly from storage. Does **not** require client authentication — the server uses its own ServiceAccount per the Terraform Provider Registry Protocol.
+Streams the provider binary archive (`.zip`) directly from storage. Does **not** require client authentication — the server uses its own ServiceAccount per the Terraform Provider Registry Protocol, which both OpenTofu and Terraform implement.
 
 ## Provider SHA256SUMS
 
@@ -239,6 +239,88 @@ GET /opendepot/providers/v1/{namespace}/{type}/{version}/SHA256SUMS.sig/{os}/{ar
 ```
 
 Returns the detached GPG signature over the `SHA256SUMS` file, signed with the key configured in `server.gpg.secretName`. Does **not** require client authentication.
+
+## Provider Network Mirror Protocol
+
+OpenDepot implements the [Provider Network Mirror Protocol](https://opentofu.org/docs/internals/provider-network-mirror-protocol/) (shared by both OpenTofu and Terraform) so configurations can reference providers by their canonical upstream identity (e.g., `registry.opentofu.org/hashicorp/aws` or `registry.terraform.io/hashicorp/aws`) while installing from OpenDepot. The mirror URL is namespace-scoped:
+
+```
+https://<host>/opendepot/providers/mirror/v1/<namespace>/
+```
+
+Clients configure this URL in their `.tofurc` via the `provider_installation.network_mirror` block. See [Consuming Providers](../guides/providers.md) for full usage examples.
+
+### Mirror: List Provider Versions
+
+```
+GET /opendepot/providers/mirror/v1/{namespace}/{hostname}/{providerNamespace}/{type}/index.json
+```
+
+Returns all available versions of a provider from the specified origin registry. Requires authentication when anonymous mode is disabled.
+
+**Path Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `namespace` | Kubernetes namespace of the Provider resource |
+| `hostname` | Origin registry hostname (`registry.opentofu.org` or `registry.terraform.io`) |
+| `providerNamespace` | Provider namespace at the origin (e.g., `hashicorp`, `datadog`) |
+| `type` | Provider name (e.g., `aws`, `azurerm`) |
+
+**Response:**
+
+```json
+{
+  "versions": {
+    "5.80.0": {},
+    "5.81.0": {}
+  }
+}
+```
+
+The version keys are normalized semver strings without a leading `v`. The values are empty objects per the Network Mirror Protocol specification.
+
+### Mirror: Provider Version Metadata
+
+```
+GET /opendepot/providers/mirror/v1/{namespace}/{hostname}/{providerNamespace}/{type}/{version}.json
+```
+
+Returns archive URLs and checksums for all OS/architecture combinations of a specific provider version. Requires authentication when anonymous mode is disabled.
+
+**Path Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `namespace` | Kubernetes namespace of the Provider resource |
+| `hostname` | Origin registry hostname (`registry.opentofu.org` or `registry.terraform.io`) |
+
+**Response:**
+
+```json
+{
+  "archives": {
+    "linux_amd64": {
+      "url": "5.80.0/linux/amd64/terraform-provider-aws_5.80.0_linux_amd64.zip",
+      "hashes": ["zh:abc123..."]
+    },
+    "linux_arm64": {
+      "url": "5.80.0/linux/arm64/terraform-provider-aws_5.80.0_linux_arm64.zip",
+      "hashes": ["zh:def456..."]
+    }
+  }
+}
+```
+
+The `url` field is a relative path from the mirror base URL. The `hashes` array uses the `zh:` prefix for packed ZIP checksums as required by the Network Mirror Protocol.
+
+### Mirror: Provider Archive Download
+
+```
+GET /opendepot/providers/mirror/v1/{namespace}/{hostname}/{providerNamespace}/{type}/{version}/{os}/{arch}/{filename}
+```
+
+Streams the provider binary archive (`.zip`) directly from storage. Does **not** require client authentication when using anonymous mirror access — the server uses its own ServiceAccount. Archive URLs are discovered via the version metadata endpoint above.
 
 ## Browse API
 
@@ -670,8 +752,9 @@ Holds Trivy source scan results. Used for both provider `go.mod` dependency scan
 
 | Field | Type | Description |
 |---|---|---|
-| `namespace` | `string` | The organisation namespace in the OpenTofu registry (e.g. `hashicorp`, `integrations`, `DataDog`). Defaults to `hashicorp`. Used for binary download and source repository lookup. Existing `Provider` resources without this field continue to work unchanged. |
-| `sourceRepository` | `string` | Full GitHub URL of the provider's source repository (e.g. `https://github.com/hashicorp/terraform-provider-aws`). When omitted, OpenDepot queries the OpenTofu registry (`api.opentofu.org`) for the repository URL, falling back to `https://github.com/{namespace}/terraform-provider-{name}` if the registry lookup fails. Set this field to override an incorrect or unavailable registry result. |
+| `namespace` | `string` | The organisation namespace in the upstream registry (e.g. `hashicorp`, `integrations`, `DataDog`). Defaults to `hashicorp`. Used for binary download and source repository lookup. Existing `Provider` resources without this field continue to work unchanged. |
+| `upstreamRegistry` | `string` | The canonical registry used to discover and download this provider. Controls upstream version discovery, archive acquisition, and the canonical provider identity exposed via the Network Mirror Protocol and UI snippets. Allowed values: `registry.opentofu.org`, `registry.terraform.io`. Defaults to `registry.opentofu.org` when omitted. Providers from different origins with the same namespace/type should be placed in separate Kubernetes namespaces to avoid Version resource-name collisions. See [Consuming Providers](../guides/providers.md) for examples. |
+| `sourceRepository` | `string` | Full GitHub URL of the provider's source repository (e.g. `https://github.com/hashicorp/terraform-provider-aws`). When omitted for an OpenTofu Registry provider, OpenDepot queries `api.opentofu.org` and falls back to `https://github.com/{namespace}/terraform-provider-{name}` if the lookup fails. Terraform Registry providers use the fallback directly because that registry does not expose equivalent source metadata. Set this field to override an incorrect or unavailable result. |
 
 ### ReadmeConfigMapRef
 

@@ -1,7 +1,7 @@
 ---
 description: "Use when: building or modifying the OpenDepot UI, adding React components, updating Material UI styling, implementing new pages in Next.js App Router, working on OIDC auth UI flows, iron-session, dev token mode, ReactFlow graphs, Playwright e2e UI tests, responsive layout, UI/UX polish, or any change scoped to services/ui/. Triggers: 'UI', 'frontend', 'Next.js', 'React', 'Material UI', 'MUI', 'component', 'page', 'Sidebar', 'Depot graph', 'ReactFlow', 'Playwright', 'iron-session', 'session', 'auth UI', 'responsive', 'dark theme', 'typography'."
 name: "OpenDepot UI Developer"
-model: Claude Sonnet 5 (copilot)
+model: "GPT-5.6 Sol"
 tools: [read, edit, search, execute, browser, todo, vscode/memory, agent, browser]
 agents: ["OpenDepot Code Review", "OpenDepot Security Review", "OpenDepot Documentation"]
 argument-hint: "UI feature or fix to implement (page, component, style change, or auth flow)"

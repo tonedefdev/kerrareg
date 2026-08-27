@@ -856,6 +856,7 @@ func providerToCard(p opendepotv1alpha1.Provider, public bool) BrowseResource {
 		Public:            public,
 		LatestVersion:     derefString(p.Status.LatestVersion),
 		ProviderNamespace: derefString(p.Spec.ProviderConfig.Namespace),
+		UpstreamRegistry:  opendepotv1alpha1.ProviderUpstreamRegistry(&p.Spec.ProviderConfig),
 	}
 }
 
@@ -2261,6 +2262,7 @@ func handleBrowseDepotsGraph(w http.ResponseWriter, r *http.Request) {
 			Namespace:         p.Namespace,
 			Name:              p.Name,
 			ProviderNamespace: derefString(p.Spec.ProviderConfig.Namespace),
+			UpstreamRegistry:  opendepotv1alpha1.ProviderUpstreamRegistry(&p.Spec.ProviderConfig),
 			Synced:            synced,
 		})
 	}

@@ -54,6 +54,7 @@ var _ = Describe("Provider Controller", func() {
 	Context("When reconciling a provider resource", func() {
 		It("creates Version CRs for each version/os/arch combination", func() {
 			providerName := "happy-path-provider"
+			upstreamRegistry := opendepotv1alpha1.TerraformRegistryHost
 			namespacedName := types.NamespacedName{Name: providerName, Namespace: testNamespace}
 
 			provider := &opendepotv1alpha1.Provider{
@@ -63,6 +64,7 @@ var _ = Describe("Provider Controller", func() {
 				},
 				Spec: opendepotv1alpha1.ProviderSpec{
 					ProviderConfig: opendepotv1alpha1.ProviderConfig{
+						UpstreamRegistry: &upstreamRegistry,
 						OperatingSystems: []string{"linux", "darwin"},
 						Architectures:    []string{"amd64", "arm64"},
 					},
@@ -104,6 +106,8 @@ var _ = Describe("Provider Controller", func() {
 			Expect(found.Spec.OperatingSystem).To(Equal("linux"))
 			Expect(found.Spec.Architecture).To(Equal("amd64"))
 			Expect(found.Spec.Type).To(Equal(opendepotv1alpha1.OpenDepotProvider))
+			Expect(found.Spec.ProviderConfigRef.UpstreamRegistry).NotTo(BeNil())
+			Expect(*found.Spec.ProviderConfigRef.UpstreamRegistry).To(Equal(opendepotv1alpha1.TerraformRegistryHost))
 
 			// Verify status was updated
 			updated := &opendepotv1alpha1.Provider{}
@@ -111,8 +115,38 @@ var _ = Describe("Provider Controller", func() {
 			Expect(updated.Status.Synced).To(BeTrue())
 			Expect(updated.Status.SyncStatus).To(Equal("Successfully synced provider"))
 			Expect(updated.Status.ProviderVersionRefs).To(HaveLen(8))
-			Expect(updated.Status.ProviderVersionRefs["1.0.0/linux/amd64"]).NotTo(BeNil())
-			Expect(updated.Status.ProviderVersionRefs["2.0.0/darwin/arm64"]).NotTo(BeNil())
+			Expect(updated.Status.ProviderVersionRefs["1.0.0-linux-amd64"]).NotTo(BeNil())
+			Expect(updated.Status.ProviderVersionRefs["2.0.0-darwin-arm64"]).NotTo(BeNil())
+		})
+
+		It("defaults an omitted upstream registry on generated Version resources", func() {
+			providerName := "default-origin-provider"
+			namespacedName := types.NamespacedName{Name: providerName, Namespace: testNamespace}
+			provider := &opendepotv1alpha1.Provider{
+				ObjectMeta: metav1.ObjectMeta{Name: providerName, Namespace: testNamespace},
+				Spec: opendepotv1alpha1.ProviderSpec{
+					ProviderConfig: opendepotv1alpha1.ProviderConfig{
+						OperatingSystems: []string{"linux"},
+						Architectures:    []string{"amd64"},
+					},
+					Versions: []opendepotv1alpha1.ProviderVersion{{Version: "1.0.0"}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, provider)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, provider)
+			})
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: namespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			versionList := &opendepotv1alpha1.VersionList{}
+			Expect(k8sClient.List(ctx, versionList,
+				client.InNamespace(testNamespace),
+				client.MatchingLabels{"opendepot.defdev.io/provider": providerName},
+			)).To(Succeed())
+			Expect(versionList.Items).To(HaveLen(1))
+			Expect(opendepotv1alpha1.ProviderUpstreamRegistry(versionList.Items[0].Spec.ProviderConfigRef)).To(Equal(opendepotv1alpha1.OpenTofuRegistryHost))
 		})
 
 		It("returns an error when operatingSystems is empty", func() {

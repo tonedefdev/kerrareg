@@ -68,7 +68,7 @@ spec:
         {{- end }}
         securityContext:
           allowPrivilegeEscalation: false
-          {{- if not (or .Values.storage.filesystem.enabled .Values.scanning.enabled) }}
+          {{- if and (not .Values.global.developmentMode) (not (or .Values.storage.filesystem.enabled .Values.scanning.enabled)) }}
           readOnlyRootFilesystem: true
           {{- end }}
         resources:

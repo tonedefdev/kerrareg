@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -20,6 +22,8 @@ const (
 	OpenDepotGithubSecretName                = "opendepot-github-application-secret"
 	OpenDepotModule                          = "Module"
 	OpenDepotProvider                        = "Provider"
+	OpenTofuRegistryHost                     = "registry.opentofu.org"
+	TerraformRegistryHost                    = "registry.terraform.io"
 )
 
 // DepotSpec defines the desired state of Depot.
@@ -183,10 +187,15 @@ type ProviderConfig struct {
 	// The name of the provider. If omitted, the name of the Provider resource
 	// is used in its place.
 	Name *string `json:"name,omitempty"`
-	// The namespace (organization) of the provider in the OpenTofu registry,
+	// The namespace (organization) of the provider in the configured upstream registry,
 	// e.g. 'hashicorp', 'integrations', 'DataDog'. Defaults to 'hashicorp' when omitted,
 	// preserving backwards compatibility for existing Provider resources.
 	Namespace *string `json:"namespace,omitempty"`
+	// The canonical registry used to discover and download this provider and exposed by the Provider Network Mirror Protocol.
+	// Defaults to registry.opentofu.org when omitted.
+	// +kubebuilder:validation:Enum=registry.opentofu.org;registry.terraform.io
+	// +kubebuilder:default=registry.opentofu.org
+	UpstreamRegistry *string `json:"upstreamRegistry,omitempty"`
 	// The OS(s) that the provider supports. This is used to set the 'os' constraint in the provider's versions.
 	OperatingSystems []string `json:"operatingSystems,omitempty"`
 	// The architecture(s) that the provider supports. This is used to set the 'arch' constraint in the provider's versions.
@@ -212,6 +221,19 @@ type ProviderConfig struct {
 	// '1.2.1' or '>= 1.0.0, < 2.0.0' or '~> 1.0.0'. This field is only
 	// respected by the Depot controller.
 	VersionConstraints string `json:"versionConstraints,omitempty"`
+}
+
+// ProviderUpstreamRegistry returns the configured canonical provider registry.
+func ProviderUpstreamRegistry(config *ProviderConfig) string {
+	if config != nil && config.UpstreamRegistry != nil {
+		upstreamRegistry := strings.TrimSpace(*config.UpstreamRegistry)
+
+		if upstreamRegistry != "" {
+			return upstreamRegistry
+		}
+	}
+
+	return OpenTofuRegistryHost
 }
 
 // +kubebuilder:object:root=true

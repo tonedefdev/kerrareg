@@ -1,0 +1,37 @@
+FROM node:22-alpine
+
+RUN apk upgrade --no-cache && apk add --no-cache gettext nginx
+
+WORKDIR /app
+
+COPY package.json yarn.lock .yarnrc.yml ./
+RUN corepack enable && yarn install --immutable
+
+COPY public/ public/
+COPY src/ src/
+COPY next.config.ts tsconfig.json ./
+COPY entrypoint.dev.sh /entrypoint.dev.sh
+
+RUN mkdir -p /app/.next \
+              /var/cache/nginx/client_temp \
+              /var/cache/nginx/proxy_temp \
+              /var/cache/nginx/fastcgi_temp \
+              /var/cache/nginx/uwsgi_temp \
+              /var/cache/nginx/scgi_temp \
+              /var/log/nginx \
+              /var/lib/nginx/tmp \
+              /var/run \
+    && chown -R 101:101 /app/.next /app/src /app/public /var/cache/nginx /var/lib/nginx /var/log/nginx \
+    && chown 101:101 /app \
+    && touch /var/run/nginx.pid \
+    && chown 101:101 /var/run/nginx.pid \
+    && chmod +x /entrypoint.dev.sh
+
+ENV HOME=/app
+ENV NEXT_TELEMETRY_DISABLED=1
+
+EXPOSE 8080
+
+USER 101
+
+ENTRYPOINT ["/entrypoint.dev.sh"]

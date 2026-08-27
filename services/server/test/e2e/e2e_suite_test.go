@@ -98,6 +98,10 @@ var _ = BeforeSuite(func() {
 	By("ensuring namespace exists")
 	cmd = exec.Command("kubectl", "create", "namespace", namespace)
 	_, _ = utils.Run(cmd) // ignore error if namespace already exists
+
+	By("creating the Valkey authentication secret")
+	err = utils.EnsureValkeyAuthSecret(namespace)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to create Valkey authentication secret")
 })
 
 var _ = AfterSuite(func() {

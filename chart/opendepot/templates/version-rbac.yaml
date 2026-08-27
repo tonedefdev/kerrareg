@@ -65,12 +65,14 @@ rules:
   - get
   - patch
   - update
+{{- if .Values.rbac.scopeToNamespace }}
 - apiGroups:
   - ""
   resources:
   - secrets
   verbs:
   - get
+{{- end }}
 - apiGroups:
   - ""
   resources:
@@ -98,4 +100,33 @@ subjects:
 - kind: ServiceAccount
   name: version-controller
   namespace: {{ .Values.global.namespace }}
+{{- if not .Values.rbac.scopeToNamespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: version-controller-secret-reader
+  namespace: {{ .Values.global.namespace }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: version-controller-secret-reader
+  namespace: {{ .Values.global.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: version-controller-secret-reader
+subjects:
+- kind: ServiceAccount
+  name: version-controller
+  namespace: {{ .Values.global.namespace }}
+{{- end }}
 {{- end }}

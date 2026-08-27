@@ -8,7 +8,7 @@ tags:
 
 # GPG Signing for Providers
 
-The Terraform Provider Registry Protocol requires that providers ship a `SHA256SUMS` file and a detached GPG signature (`SHA256SUMS.sig`). OpenTofu downloads both and verifies the signature using the public key returned by the registry's package metadata endpoint. OpenDepot handles signing automatically — you provide the key, and the server signs on every request.
+The Terraform Provider Registry Protocol, implemented by both OpenTofu and Terraform, requires that providers ship a `SHA256SUMS` file and a detached GPG signature (`SHA256SUMS.sig`). The client downloads both and verifies the signature using the public key returned by the registry's package metadata endpoint. OpenDepot handles signing automatically — you provide the key, and the server signs on every request.
 
 **Generating a key pair**
 

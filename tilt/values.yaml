@@ -1,0 +1,139 @@
+global:
+  developmentMode: true
+  imagePullPolicy: IfNotPresent
+
+provider:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 1Gi
+
+module:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 1Gi
+
+depot:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 1Gi
+
+version:
+  zapLogLevel: 5
+
+server:
+  anonymousAuth: false
+  useBearerToken: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 4Gi
+  gpg:
+    secretName: opendepot-provider-gpg
+  oidc:
+    enabled: true
+    issuerUrl: http://opendepot-dex.opendepot-system.svc.cluster.local:5556/dex
+    clientId: opendepot
+    groupsClaim: groups
+    authzUrl: https://opendepot.localtest.me:8443/dex/auth
+    tokenUrl: https://opendepot.localtest.me:8443/dex/token
+    dexProxy:
+      enabled: true
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: false
+    istio:
+      enabled: false
+  tls:
+    enabled: false
+
+valkey:
+  auth:
+    enabled: false
+
+storage:
+  filesystem:
+    enabled: true
+    hostPath: /var/local/opendepot-modules
+
+scanning:
+  enabled: true
+  providerScanning: true
+  cache:
+    storageClassName: standard
+    accessMode: ReadWriteOnce
+
+ui:
+  enabled: true
+  baseUrl: https://opendepot.localtest.me:8443
+  sessionPasswordSecretName: ui-session-secret
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits: null
+  nginx:
+    preserveHostPort: true
+  oidc:
+    enabled: true
+    issuerUrl: http://opendepot-dex.opendepot-system.svc.cluster.local:5556/dex
+    authzUrl: https://opendepot.localtest.me:8443/dex/auth
+    clientId: opendepot-ui
+    clientSecretName: ui-oidc-secret
+
+dex:
+  enabled: true
+  envFrom:
+    - secretRef:
+        name: ui-oidc-secret
+  image:
+    tag: v2.45.0
+  config:
+    issuer: http://opendepot-dex.opendepot-system.svc.cluster.local:5556/dex
+    storage:
+      type: memory
+    enablePasswordDB: true
+    oauth2:
+      responseTypes:
+        - code
+      grantTypes:
+        - authorization_code
+        - urn:ietf:params:oauth:grant-type:device_code
+      skipApprovalScreen: true
+    staticPasswords: []
+    connectors: []
+    staticClients:
+      - id: opendepot-ui
+        name: OpenDepot UI
+        secretEnv: OPENDEPOT_UI_CLIENT_SECRET
+        trustedPeers:
+          - opendepot
+        redirectURIs:
+          - https://opendepot.localtest.me:8443/auth/callback
+      - id: opendepot
+        name: OpenDepot
+        public: true
+        redirectURIs:
+          - http://localhost:10000/login
+          - http://localhost:10001/login
+          - http://localhost:10002/login
+          - http://localhost:10003/login
+          - http://localhost:10004/login
+          - http://localhost:10005/login
+          - http://localhost:10006/login
+          - http://localhost:10007/login
+          - http://localhost:10008/login
+          - http://localhost:10009/login
+          - http://localhost:10010/login

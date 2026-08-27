@@ -1,23 +1,9 @@
-# KSV-0041: ClusterRole with secrets access
+# KSV-0109: ConfigMap with secrets
 #
-# Both the depot-controller and version-controller ClusterRoles include
-# secrets: [get] for GetGithubApplicationSecret, which performs a single
-# named-object lookup (k8sClient.Get) within the controller's own namespace.
-# KSV-0041 fires on any secrets access in a ClusterRole regardless of verb scope.
-#
-# Production deployments SHOULD use rbac.scopeToNamespace=true, which renders
-# these as namespaced Role objects (not ClusterRole) and eliminates this finding.
-# The ClusterRole path is only used in the default single-namespace install.
-#
-# See chart/opendepot/values.yaml rbac.scopeToNamespace for guidance.
-KSV-0041
+# The vendored Valkey chart stores an initialization shell script in a ConfigMap.
+# Trivy flags the script's local variable named "password", but no credential is
+# embedded in the ConfigMap. At runtime the script reads the value from the mounted
+# usersExistingSecret, hashes it, and writes the generated ACL file with mode 0400.
+KSV-0109
 
-# CVEs in embedded Trivy binary (/usr/local/bin/trivy) only.
-# The version-controller application binary itself is 0-CVE clean.
-# Trivy v0.72.0 is the latest upstream release as of 2026-07-11; no newer
-# version is available that resolves these dependencies.
-# These suppressions must be removed when a Trivy release ships with fixes for:
-#   - oras.land/oras-go/v2 >= 2.6.1, stdlib >= 1.25.12 / 1.26.5
-# Tracking: https://github.com/tonedefdev/opendepot/issues/65
-CVE-2026-50151
-CVE-2026-39822
+# No vulnerability suppressions are currently required.

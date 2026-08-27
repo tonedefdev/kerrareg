@@ -38,7 +38,9 @@ spec:
         {{- end }}
         securityContext:
           allowPrivilegeEscalation: false
+          {{- if not .Values.global.developmentMode }}
           readOnlyRootFilesystem: true
+          {{- end }}
         resources:
           {{- toYaml .Values.provider.resources | nindent 10 }}
       {{- with .Values.provider.nodeSelector }}

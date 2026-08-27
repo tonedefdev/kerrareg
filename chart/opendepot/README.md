@@ -11,7 +11,7 @@ This chart deploys five OpenDepot services:
 | **Version Controller** | Enabled | Fetches module source from GitHub and stores it in the configured backend |
 | **Module Controller** | Enabled | Orchestrates `Version` resource creation and lifecycle |
 | **Depot Controller** | Enabled | Pulls modules from external sources based on version constraints |
-| **Provider Controller** | Disabled | Mirrors provider binaries from the HashiCorp Releases API |
+| **Provider Controller** | Disabled | Mirrors provider binaries from upstream provider registries (`registry.opentofu.org` or `registry.terraform.io`) |
 | **Server** | Enabled | Implements the Terraform Module Registry Protocol API |
 
 All images are pulled from `ghcr.io/tonedefdev/opendepot/` and default to the tag set in `global.image.tag`.
@@ -57,6 +57,7 @@ helm install opendepot ./chart/opendepot \
 |-----------|---------|-------------|
 | `global.namespace` | `opendepot-system` | Kubernetes namespace for all resources |
 | `global.imagePullPolicy` | `IfNotPresent` | Image pull policy applied to all containers |
+| `global.developmentMode` | `false` | Disable read-only root filesystems for local live-update workflows such as Tilt. Do not enable in production |
 | `global.image.tag` | `""` | Default image tag for all services. Defaults to `Chart.AppVersion` when empty; set to override |
 
 ### Version Controller
@@ -103,7 +104,7 @@ helm install opendepot ./chart/opendepot \
 
 ### Provider Controller
 
-The Provider controller is disabled by default. Enable it to mirror provider binaries from the HashiCorp Releases API into your registry.
+The Provider controller is disabled by default. Enable it to mirror provider binaries from upstream provider registries (`registry.opentofu.org` or `registry.terraform.io`) into your registry.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -210,14 +211,14 @@ OIDC authentication lets users run `tofu login` instead of distributing kubeconf
 | `server.oidc.allowClientCredentials` | `false` | When `true`, Dex client credentials tokens are accepted. The token's `sub` claim is mapped to a virtual group `"client:<sub>"` and evaluated against GroupBinding resources |
 | `server.oidc.authzUrl` | `""` | Override the authorization URL advertised in `login.v1`. Optional manual escape hatch; not needed when `server.oidc.dexProxy.enabled=true` |
 | `server.oidc.tokenUrl` | `""` | Override the token URL advertised in `login.v1`. Optional manual escape hatch; not needed when `server.oidc.dexProxy.enabled=true` |
-| `server.oidc.dexProxy.enabled` | `false` | When `true`, the server reverse-proxies `/dex/*` requests to the bundled Dex service so Dex never needs its own public ingress or hostname. Requires `dex.enabled=true` and `server.oidc.issuerUrl` set to the external, path-based URL matching `dex.config.issuer` |
+| `server.oidc.dexProxy.enabled` | `true` | When OIDC is enabled, reverse-proxies `/dex/*` to the bundled Dex service so Dex does not need its own public ingress or hostname. Requires `dex.enabled=true` and `server.oidc.issuerUrl` set to the external, path-based URL matching `dex.config.issuer`. Set to `false` for external OIDC providers; ignored when OIDC is disabled |
 
 ### RBAC
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `rbac.create` | `true` | Create `ClusterRole`/`ClusterRoleBinding` (or `Role`/`RoleBinding`) for each service |
-| `rbac.scopeToNamespace` | `false` | **Recommended for production: `true`**. Use namespace-scoped `Role`/`RoleBinding` instead of cluster-scoped. Also sets `WATCH_NAMESPACE` on controller deployments. Setting `true` constrains all RBAC permissions (including `secrets: [get]` for GitHub App auth) to the install namespace. |
+| `rbac.scopeToNamespace` | `false` | **Recommended for production: `true`**. Use namespace-scoped `Role`/`RoleBinding` instead of cluster-scoped for controller resources and set `WATCH_NAMESPACE` on controller deployments. Secret reads for GitHub App authentication are always granted separately in the install namespace. |
 
 ### Service Accounts
 
@@ -239,6 +240,10 @@ The filesystem storage backend uses a shared `PersistentVolumeClaim` (or a `host
 | `storage.filesystem.size` | `10Gi` | PVC storage request |
 
 When `hostPath` is set, an `initContainer` (`busybox:1.37`) runs as root to `chown` the mount point to UID `65532` before the main containers start.
+
+### Valkey
+
+The bundled statistics store defaults to `valkey/valkey:8-alpine`, the rolling Valkey 8 LTS Alpine variant. The Alpine image minimizes the operating-system package surface while retaining upstream security updates. ACL authentication is enabled by default and requires a pre-existing `opendepot-valkey-auth` Secret with a `default` password key. Custom Secret names must match in `valkey.auth.usersExistingSecret` and `server.stats.valkeyPasswordSecretName`.
 
 ### Scanning
 
@@ -412,7 +417,7 @@ kubectl delete -f chart/opendepot/crds/
 ## Security Notes
 
 - All controller containers run as UID `65532` with `runAsNonRoot: true` and `allowPrivilegeEscalation: false`.
-- The Server container sets `readOnlyRootFilesystem: true` unless filesystem storage is enabled.
+- Application containers set `readOnlyRootFilesystem: true` unless their runtime requires writable storage. Setting `global.developmentMode: true` disables this protection for local live-update workflows and must not be used in production.
 - When `server.anonymousAuth` is `false` and `server.useBearerToken` is `true` (the defaults), the server requires a valid bearer token on every request.
 - When `server.oidc.enabled` is `true`, the server validates OIDC JWTs locally via JWKS — no Dex round-trip per request.
 - Do not commit `server.oidc.clientSecret` or Dex connector secrets in plain text. Use an external secret operator (Sealed Secrets, External Secrets Operator) or pre-create the Secret and reference it via `server.oidc.clientSecretName`.

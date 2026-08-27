@@ -79,11 +79,19 @@ jobs:
 
       - name: Write .tofurc
         run: |
-          export TF_TOKEN_OPENDEPOT_DEFDEV_IO="${{ steps.opendepot-token.outputs.token }}"
           cat > ~/.tofurc <<EOF
-          host "opendepot.defdev.io" {
-            services = {
-              "providers.v1" = "https://opendepot.defdev.io/opendepot/providers/v1/"
+          credentials "opendepot.defdev.io" {
+            token = "${{ steps.opendepot-token.outputs.token }}"
+          }
+
+          provider_installation {
+            network_mirror {
+              url     = "https://opendepot.defdev.io/opendepot/providers/mirror/v1/opendepot-system/"
+              include = ["registry.opentofu.org/*/*"]
+            }
+
+            direct {
+              exclude = ["registry.opentofu.org/*/*"]
             }
           }
           EOF
@@ -94,7 +102,9 @@ jobs:
       - run: tofu init
 ```
 
-The CC token is short-lived (TTL controlled by Dex) and scoped to read-only operations via the `GroupBinding`. No `kubectl` access or cluster kubeconfig is required — only the Dex token endpoint must be reachable from the runner.
+This configures OpenTofu to install providers from OpenDepot via the Network Mirror Protocol while preserving canonical `registry.opentofu.org` provider identity in your configuration and lockfile. The CC token is short-lived (TTL controlled by Dex) and scoped to read-only operations via the `GroupBinding`. No `kubectl` access or cluster kubeconfig is required — only the Dex token endpoint must be reachable from the runner.
+
+To use Terraform instead, rename the file to `.terraformrc` and replace `setup-opentofu` with `hashicorp/setup-terraform`. If your `Provider` resources use `upstreamRegistry: registry.terraform.io`, update the `include` and `exclude` patterns to `registry.terraform.io/*/*`.
 
 For full configuration details see [Client Credentials (Machine-to-Machine)](../configuration/oidc.md#client-credentials-machine-to-machine). For a side-by-side comparison of all supported authentication methods and their access-control mechanisms, see the [Authentication Comparison](../authentication.md#authentication-comparison) table.
 
@@ -191,11 +201,19 @@ jobs:
 
       - name: Write .tofurc
         run: |
-          export TF_TOKEN_OPENDEPOT_DEFDEV_IO="${{ steps.opendepot-token.outputs.token }}"
           cat > ~/.tofurc <<EOF
-          host "opendepot.defdev.io" {
-            services = {
-              "providers.v1" = "https://opendepot.defdev.io/opendepot/providers/v1/"
+          credentials "opendepot.defdev.io" {
+            token = "${{ steps.opendepot-token.outputs.token }}"
+          }
+
+          provider_installation {
+            network_mirror {
+              url     = "https://opendepot.defdev.io/opendepot/providers/mirror/v1/opendepot-system/"
+              include = ["registry.opentofu.org/*/*"]
+            }
+
+            direct {
+              exclude = ["registry.opentofu.org/*/*"]
             }
           }
           EOF
@@ -206,7 +224,9 @@ jobs:
       - run: tofu init
 ```
 
-The SA token is short-lived (15 minutes) and scoped to read-only registry operations via the RBAC defined above. No Dex client credentials are needed.
+This configures OpenTofu to install providers from OpenDepot via the Network Mirror Protocol while preserving canonical `registry.opentofu.org` provider identity. The SA token is short-lived (15 minutes) and scoped to read-only registry operations via the RBAC defined above. No Dex client credentials are needed.
+
+To use Terraform instead, rename the file to `.terraformrc` and replace `setup-opentofu` with `hashicorp/setup-terraform`. If your `Provider` resources use `upstreamRegistry: registry.terraform.io`, update the `include` and `exclude` patterns to `registry.terraform.io/*/*`.
 
 This approach uses `kubectl create token` to authenticate as the dedicated `ci-registry-reader` SA, keeping the pipeline's registry access strictly bounded to the RBAC above — regardless of how broad the runner's cloud IAM role is. If your runner's cloud IAM role already has appropriate K8s RBAC configured, you can simplify by using the provider token directly instead of creating an SA token (see [Managed Cluster Tokens](../authentication.md#method-2-managed-cluster-tokens)).
 

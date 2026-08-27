@@ -44,6 +44,8 @@ ui:
 
 When `ui.oidc.enabled: true` and `ui.oidc.clientId` is non-empty, the chart passes `--oidc-ui-client-id={{ ui.oidc.clientId }}` to the server. The server creates a second OIDC verifier for this client ID so that UI-issued tokens are accepted on browse and stats endpoints.
 
+The UI requires an HTTPS issuer in production and accepts discovered authorization, token, and JWKS endpoints only when they share the configured issuer origin. This prevents discovery metadata from redirecting server-side requests or credentials to another host. `ui.oidc.authzUrl` is an explicit browser authorization override and may use another origin; insecure HTTP endpoints are enabled only when `global.developmentMode: true`.
+
 The Dex `opendepot-ui` client must include `trustedPeers: [opendepot]` so that Dex embeds the server's audience in UI-issued tokens. Without this, the server rejects the token even when `--oidc-ui-client-id` is configured:
 
 ```yaml

@@ -46,12 +46,16 @@ var _ = Describe("Module Controller", func() {
 			By("creating the custom resource for the Kind Module")
 			err := k8sClient.Get(ctx, typeNamespacedName, resource2)
 			if err != nil && errors.IsNotFound(err) {
+				fileFormat := "zip"
 				resource := &opendepotv1alpha1.Module{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: opendepotv1alpha1.ModuleSpec{
+						ModuleConfig: opendepotv1alpha1.ModuleConfig{FileFormat: &fileFormat},
+						Versions:     []opendepotv1alpha1.ModuleVersion{{Version: "1.0.0"}},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

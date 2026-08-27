@@ -43,6 +43,10 @@ spec:
           value: {{ .Values.ui.oidc.scopes | quote }}
         - name: OIDC_CALLBACK_PATH
           value: {{ .Values.ui.oidc.callbackPath | quote }}
+        {{- if .Values.global.developmentMode }}
+        - name: OIDC_ALLOW_INSECURE_HTTP
+          value: "true"
+        {{- end }}
         {{- if .Values.ui.oidc.authzUrl }}
         - name: OIDC_AUTHZ_URL
           value: {{ .Values.ui.oidc.authzUrl | quote }}
@@ -66,7 +70,9 @@ spec:
               key: sessionPassword
         securityContext:
           allowPrivilegeEscalation: false
+          {{- if not .Values.global.developmentMode }}
           readOnlyRootFilesystem: true
+          {{- end }}
         volumeMounts:
         - name: nginx-config
           mountPath: /etc/nginx/nginx.conf.template

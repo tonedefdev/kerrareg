@@ -1,28 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
+import { fetchOIDCEndpoint, validateOIDCEndpoint, verifyIDToken } from "@/lib/oidc";
 import type { SessionData } from "@/lib/session";
 import { sessionOptions } from "@/lib/session";
-
-/**
- * parseJWTNonce decodes the payload segment of a JWT and returns the `nonce`
- * claim, or null if the token is malformed or the claim is absent.
- * The signature is NOT verified here — that is handled by the server's JWKS
- * verification. This is solely to read the plaintext nonce claim for CSRF
- * replay protection at the callback boundary.
- */
-function parseJWTNonce(token: string): string | null {
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  try {
-    const paddedPayload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const decoded = JSON.parse(
-      Buffer.from(paddedPayload, "base64").toString("utf-8"),
-    ) as { nonce?: string };
-    return decoded.nonce ?? null;
-  } catch {
-    return null;
-  }
-}
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const issuer = process.env.OIDC_ISSUER_URL;
@@ -33,6 +13,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   if (!issuer || !clientId || !baseUrl) {
     return new NextResponse("OIDC is not configured", { status: 503 });
+  }
+
+  const allowInsecureHTTP = process.env.OIDC_ALLOW_INSECURE_HTTP === "true";
+  try {
+    validateOIDCEndpoint(issuer, issuer, { allowInsecureHTTP });
+  } catch {
+    return new NextResponse("Invalid OIDC issuer URL", { status: 503 });
   }
 
   const searchParams = req.nextUrl.searchParams;
@@ -61,11 +48,35 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   // Fetch OIDC discovery document.
-  const discoveryRes = await fetch(`${issuer}/.well-known/openid-configuration`);
+  let discoveryRes: Response;
+  try {
+    discoveryRes = await fetchOIDCEndpoint(`${issuer}/.well-known/openid-configuration`);
+  } catch {
+    return new NextResponse("OIDC provider is unreachable", { status: 502 });
+  }
   if (!discoveryRes.ok) {
     return new NextResponse("Failed to fetch OIDC discovery document", { status: 502 });
   }
-  const discovery = (await discoveryRes.json()) as { token_endpoint: string };
+  const discovery = (await discoveryRes.json()) as {
+    issuer: string;
+    token_endpoint: string;
+    jwks_uri: string;
+  };
+
+  if (
+    discovery.issuer !== issuer ||
+    !discovery.token_endpoint ||
+    !discovery.jwks_uri
+  ) {
+    return new NextResponse("Invalid OIDC discovery document", { status: 502 });
+  }
+
+  try {
+    validateOIDCEndpoint(discovery.token_endpoint, issuer, { allowInsecureHTTP });
+    validateOIDCEndpoint(discovery.jwks_uri, issuer, { allowInsecureHTTP });
+  } catch {
+    return new NextResponse("Invalid OIDC discovery endpoints", { status: 502 });
+  }
 
   // Exchange authorization code for token set.
   const tokenBody = new URLSearchParams({
@@ -77,11 +88,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     ...(clientSecret ? { client_secret: clientSecret } : {}),
   });
 
-  const tokenRes = await fetch(discovery.token_endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: tokenBody.toString(),
-  });
+  let tokenRes: Response;
+  try {
+    tokenRes = await fetchOIDCEndpoint(discovery.token_endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: tokenBody.toString(),
+    });
+  } catch {
+    return new NextResponse("Token exchange failed", { status: 502 });
+  }
 
   if (!tokenRes.ok) {
     return new NextResponse("Token exchange failed", { status: 502 });
@@ -97,11 +113,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return new NextResponse("No id_token in response", { status: 502 });
   }
 
-  // Validate the nonce claim inside the id_token to prevent token replay attacks.
-  // The id_token is a signed JWT: header.payload.signature — we only need the payload.
-  const idTokenNonce = parseJWTNonce(tokenSet.id_token);
-  if (!idTokenNonce || idTokenNonce !== storedNonce) {
-    return new NextResponse("Nonce mismatch — possible token replay", { status: 400 });
+  try {
+    await verifyIDToken(tokenSet.id_token, {
+      issuer,
+      clientId,
+      nonce: storedNonce,
+      jwksUri: discovery.jwks_uri,
+    });
+  } catch {
+    return new NextResponse("Invalid ID token", { status: 400 });
   }
 
   // Store the token set in the session cookie.

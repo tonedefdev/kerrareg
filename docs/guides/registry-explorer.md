@@ -30,90 +30,34 @@ When `server.ingress.istio.enabled: true` and `ui.enabled: true`, the Istio `Vir
 !!! warning
     When `ui.enabled: true`, the `server-ingress.yaml` template is automatically disabled. If you were previously routing directly through the server Ingress, migrate to `ui.ingress` before enabling the UI.
 
-## Local Quick Start (Kind)
+## Local Quick Start with Tilt
 
-The fastest way to try the UI is with a local [Kind](https://kind.sigs.k8s.io/) cluster using the anonymous-auth mode — no OIDC configuration required.
+The fastest way to try the Registry Explorer is the repository's [Tilt](https://tilt.dev/) environment. It creates or reuses a local Kind cluster, builds the complete stack, configures Dex OIDC, generates development secrets, and enables live updates.
 
-**Prerequisites**: Docker, Kind, kubectl, Helm, and `make` installed.
-
-```bash
-# Build all container images, deploy the UI in anonymous-auth mode,
-# and start the port-forward in one step.
-make ui-setup
-```
-
-Once complete, open **http://opendepot.localtest.me:8080** in your browser.
-`opendepot.localtest.me` resolves to `127.0.0.1` via public DNS — no `/etc/hosts` editing needed.
-
-In anonymous-auth mode every visitor sees all resources. This is fine for local exploration but should never be used in production.
-
-### Testing with OIDC login
-
-To test the full OIDC login flow locally (user accounts, GroupBinding visibility rules), run:
+Install the [local quickstart prerequisites](../getting-started/quickstart.md#prerequisites), then run from the repository root:
 
 ```bash
-# Build all images, deploy Dex + server OIDC + UI OIDC + scanning,
-# and start the port-forward.
-make ui-setup-oidc PASS=yourpassword
+export OPENDEPOT_DEV_PASSWORD='choose-a-local-password'
+tilt/scripts/up.sh
 ```
 
-This single target runs the full end-to-end setup: it builds and loads all service images (including the scanning-enabled version-controller variant), auto-creates a throwaway GPG signing secret for the provider shasums endpoint (`make ui-gpg-secret`), deploys the complete Helm release with Dex, OIDC (using [`server.oidc.dexProxy.enabled`](../configuration/oidc.md#recommended-proxy-dex-through-the-server) so Dex is reverse-proxied through the server/UI rather than needing its own port-forward), provider controller, and Trivy scanning, starts the single UI port-forward, and writes `~/.tofurc` (`make ui-tofurc`) so `tofu login opendepot.localtest.me:8080` works immediately. No `mkcert` or TLS certificate is required for local testing.
+Wait for the `ui` resource to become ready in the [Tilt dashboard](http://localhost:10350), then open [https://opendepot.localtest.me:8443](https://opendepot.localtest.me:8443). Sign in as `dev@example.com` with the value of `OPENDEPOT_DEV_PASSWORD`.
 
-This registers two Dex static clients:
-
-| Client | Purpose | Redirect URI |
-|--------|---------|--------------|
-| `opendepot-ui` | Browser PKCE login | `http://opendepot.localtest.me:8080/auth/callback` |
-| `opendepot` | `tofu login` CLI flow | `http://localhost:1000{0-10}/login` |
-
-The default test user is `dev@example.com` / `PASS` and belongs to the group `local-test-group`. Override defaults via Makefile variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OIDC_EMAIL` | `dev@example.com` | Test user email |
-| `OIDC_USER` | `devuser` | Test user display name |
-| `OIDC_GROUP` | `local-test-group` | Group name for GroupBinding tests |
-| `UI_PORT` | `8080` | Host port for the UI port-forward |
-
-Stop the port-forward when done:
+Create sample resources from the Tilt dashboard or run:
 
 ```bash
-make ui-stop
+tilt trigger seed-sample-resources
 ```
 
-#### `make ui-tofurc` — configure `tofu login`
+The sample `GroupBinding` grants the local user access to the seeded resources. Refresh the Registry Explorer to browse version metadata, READMEs, and scan findings.
 
-`make ui-tofurc` writes `~/.tofurc` with a `host` block that maps `opendepot.localtest.me:8080` to the HTTP endpoints exposed by the single UI port-forward. This is called automatically by `make ui-setup-oidc`, but you can run it manually at any time to regenerate the file — for example, if `~/.tofurc` was overwritten or if you changed `UI_PORT`.
+Stop Tilt with ++ctrl+c++, then remove the deployed resources while preserving the local cluster and image registry:
 
-The generated block looks like this:
-
-```hcl
-host "opendepot.localtest.me:8080" {
-  services = {
-    "modules.v1"   = "http://opendepot.localtest.me:8080/opendepot/modules/v1/"
-    "providers.v1" = "http://opendepot.localtest.me:8080/opendepot/providers/v1/"
-    "login.v1" = {
-      client      = "opendepot"
-      grant_types = ["authz_code"]
-      authz       = "http://opendepot.localtest.me:8080/dex/auth"
-      token       = "http://opendepot.localtest.me:8080/dex/token"
-      scopes      = ["openid", "email", "profile", "groups", "offline_access"]
-      ports       = [10000, 10010]
-    }
-  }
-}
+```bash
+tilt down
 ```
 
-The `authz`/`token` URLs point at Dex through the single UI port-forward ([`server.oidc.dexProxy.enabled`](../configuration/oidc.md#recommended-proxy-dex-through-the-server)) rather than a separate Dex port-forward. Because the port-forward exposes the registry at `opendepot.localtest.me:8080` (hostname with port), OpenTofu requires both the `modules.v1`/`providers.v1` service overrides **and** the `login.v1` block in the same `host` key — a bare `host "opendepot.localtest.me"` block without the port is insufficient for authentication.
-
-#### `make ui-gpg-secret` — provider GPG signing key
-
-`make ui-gpg-secret` generates a throwaway RSA 2048 GPG keypair and creates the `opendepot-provider-gpg` Kubernetes Secret in `opendepot-system`. The secret is referenced by `server.gpg.secretName` in the Helm values and enables the provider shasums endpoint to sign `SHA256SUMS` files. Without this secret, `tofu init` for a provider returns `501` with `signing metadata not configured`.
-
-This target is called automatically by `make ui-deploy` (and therefore by `make ui-setup-oidc`). It is idempotent — if the secret already exists, it prints a message and exits without overwriting it.
-
-!!! note "Why `~/.tofurc` is still needed"
-    This local registry is served over plain HTTP (no mkcert TLS), but OpenTofu's service discovery protocol only works over HTTPS. The `host` block in `~/.tofurc` bypasses discovery entirely by defining `modules.v1`/`providers.v1`/`login.v1` explicitly, which is why `login.v1` must be spelled out even though [`server.oidc.dexProxy.enabled`](../configuration/oidc.md#recommended-proxy-dex-through-the-server) already makes Dex reachable through the single UI port-forward.
+See [Local Quickstart with Tilt](../getting-started/quickstart.md) for provider mirror testing, CLI consumption, development controls, and full cleanup instructions.
 
 ## Enabling the UI
 
@@ -314,22 +258,41 @@ See [GroupBinding Access Control](groupbinding.md) for full expression syntax, c
 
 ## HCL Usage Snippets
 
-Every module and provider detail page (`/<namespace>/<kind>/<name>`) shows a **Usage** card with a ready-to-paste HCL block and a copy-to-clipboard button.
+Every module and provider detail page (`/<namespace>/<kind>/<name>`) shows a **Usage** card with ready-to-paste HCL blocks and copy-to-clipboard buttons.
 
-For a **provider**, the card shows a `versions.tf` block:
+For a **provider**, the card shows CLI configuration snippets for both OpenTofu (`.tofurc`) and Terraform (`.terraformrc`) with the `provider_installation.network_mirror` block:
+
+```hcl
+provider_installation {
+  network_mirror {
+    url     = "<mirrorUrl>"
+    include = ["<canonicalSource>"]
+  }
+
+  direct {
+    exclude = ["<canonicalSource>"]
+  }
+}
+```
+
+The `<canonicalSource>` placeholder is populated with the canonical upstream identity (`registry.opentofu.org/*/*` or `registry.terraform.io/*/*`) based on the Provider resource's `spec.providerConfig.upstreamRegistry` field.
+
+The card also shows a **Provider requirement** block with the canonical source identity:
 
 ```hcl
 terraform {
   required_providers {
     <name> = {
-      source  = "<registryHost>/<namespace>/<name>"
+      source  = "<providerNamespace>/<name>"
       version = "<latestVersion>"
     }
   }
 }
 ```
 
-For a **module**, the card shows a `module` block:
+The canonical source (e.g., `hashicorp/aws`) is preserved in your configuration and lockfile, while the mirror URL tells the CLI to install from OpenDepot. See [Consuming Providers](providers.md) for full details on the Network Mirror workflow.
+
+For a **module**, the card shows a single `module` block:
 
 ```hcl
 module "<name>" {
@@ -443,7 +406,13 @@ Summary counts (modules, providers, versions, sync health, security posture, sto
 
 ## Download Tracking
 
-Download events are recorded automatically in the bundled Valkey instance that is deployed alongside the server. No extra configuration is required to enable tracking.
+Download events are recorded automatically in the bundled Valkey instance that is deployed alongside the server. Before installation, create the required ACL Secret:
+
+```bash
+kubectl create secret generic opendepot-valkey-auth \
+  --from-literal=default="$(openssl rand -base64 32)" \
+  --namespace opendepot-system
+```
 
 By default, Valkey persists data to a PVC so stats survive pod restarts. For local development or Kind clusters without a StorageClass, disable persistence in your Helm values:
 

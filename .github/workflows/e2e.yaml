@@ -77,7 +77,7 @@ jobs:
         uses: aquasecurity/setup-trivy@v0.3.1
         with:
           cache: true
-          version: v0.72.0
+          version: v0.74.0
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@v0.36.0
@@ -205,6 +205,18 @@ jobs:
         uses: opentofu/setup-opentofu@v1
         with:
           tofu_version: "1.6.0"
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+          terraform_wrapper: false
+
+      - name: Install local TLS certificate authority
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mkcert libnss3-tools
+          mkcert -install
 
       - name: Create kind cluster
         run: kind create cluster --name opendepot-test-e2e

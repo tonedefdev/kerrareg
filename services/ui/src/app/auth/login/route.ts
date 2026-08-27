@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
+import { fetchOIDCEndpoint, validateOIDCEndpoint } from "@/lib/oidc";
 
 // PKCE + state + nonce authorization redirect.
 export async function GET(_req: NextRequest): Promise<NextResponse> {
@@ -13,10 +14,17 @@ export async function GET(_req: NextRequest): Promise<NextResponse> {
     return new NextResponse("OIDC is not configured", { status: 503 });
   }
 
+  const allowInsecureHTTP = process.env.OIDC_ALLOW_INSECURE_HTTP === "true";
+  try {
+    validateOIDCEndpoint(issuer, issuer, { allowInsecureHTTP });
+  } catch {
+    return new NextResponse("Invalid OIDC issuer URL", { status: 503 });
+  }
+
   // Fetch OIDC discovery document to get the authorization endpoint.
   let discoveryRes: Response;
   try {
-    discoveryRes = await fetch(`${issuer}/.well-known/openid-configuration`);
+    discoveryRes = await fetchOIDCEndpoint(`${issuer}/.well-known/openid-configuration`);
   } catch {
     return new NextResponse("OIDC provider is unreachable", { status: 503 });
   }
@@ -28,6 +36,12 @@ export async function GET(_req: NextRequest): Promise<NextResponse> {
   const discovery = (await discoveryRes.json()) as {
     authorization_endpoint: string;
   };
+
+  try {
+    validateOIDCEndpoint(discovery.authorization_endpoint, issuer, { allowInsecureHTTP });
+  } catch {
+    return new NextResponse("Invalid OIDC discovery endpoint", { status: 502 });
+  }
 
   // Generate PKCE code verifier + challenge.
   const codeVerifier = crypto.randomBytes(32).toString("base64url");
@@ -44,7 +58,15 @@ export async function GET(_req: NextRequest): Promise<NextResponse> {
   // Use this in local Kind environments where the issuerUrl is an in-cluster
   // address that is unreachable from browsers (e.g. port-forward dev setups).
   const authzUrlOverride = process.env.OIDC_AUTHZ_URL;
-  const authUrl = new URL(authzUrlOverride ?? discovery.authorization_endpoint);
+  let authUrl: URL;
+  try {
+    authUrl = validateOIDCEndpoint(authzUrlOverride ?? discovery.authorization_endpoint, issuer, {
+      allowCrossOrigin: authzUrlOverride !== undefined,
+      allowInsecureHTTP,
+    });
+  } catch {
+    return new NextResponse("Invalid OIDC authorization endpoint", { status: 502 });
+  }
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("response_type", "code");
