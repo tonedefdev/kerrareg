@@ -43,9 +43,11 @@ server:
     secretName: opendepot-provider-gpg
   oidc:
     enabled: true
-    issuerUrl: http://opendepot.localtest.me:8080/dex
+    issuerUrl: http://opendepot-dex.opendepot-system.svc.cluster.local:5556/dex
     clientId: opendepot
     groupsClaim: groups
+    authzUrl: https://opendepot.localtest.me:8443/dex/auth
+    tokenUrl: https://opendepot.localtest.me:8443/dex/token
     dexProxy:
       enabled: true
   service:
@@ -75,7 +77,7 @@ scanning:
 
 ui:
   enabled: true
-  baseUrl: http://opendepot.localtest.me:8080
+  baseUrl: https://opendepot.localtest.me:8443
   sessionPasswordSecretName: ui-session-secret
   resources:
     requests:
@@ -86,8 +88,8 @@ ui:
     preserveHostPort: true
   oidc:
     enabled: true
-    issuerUrl: http://opendepot.localtest.me:8080/dex
-    authzUrl: http://opendepot.localtest.me:8080/dex/auth
+    issuerUrl: http://opendepot-dex.opendepot-system.svc.cluster.local:5556/dex
+    authzUrl: https://opendepot.localtest.me:8443/dex/auth
     clientId: opendepot-ui
     clientSecretName: ui-oidc-secret
 
@@ -99,7 +101,7 @@ dex:
   image:
     tag: v2.45.0
   config:
-    issuer: http://opendepot.localtest.me:8080/dex
+    issuer: http://opendepot-dex.opendepot-system.svc.cluster.local:5556/dex
     storage:
       type: memory
     enablePasswordDB: true
@@ -119,7 +121,7 @@ dex:
         trustedPeers:
           - opendepot
         redirectURIs:
-          - http://opendepot.localtest.me:8080/auth/callback
+          - https://opendepot.localtest.me:8443/auth/callback
       - id: opendepot
         name: OpenDepot
         public: true

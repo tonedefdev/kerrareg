@@ -214,7 +214,7 @@ k8s_resource(
     'ui',
     resource_deps=['server'],
     port_forwards=[port_forward(8080, 8080, name='OpenDepot UI')],
-    links=[link('http://opendepot.localtest.me:8080', 'OpenDepot UI')],
+    links=[link('https://opendepot.localtest.me:8443', 'OpenDepot UI')],
     labels=['frontend'],
 )
 
@@ -248,7 +248,6 @@ local_resource(
     'provider-mirror-tls',
     serve_cmd='tilt/scripts/provider-mirror-proxy.sh',
     resource_deps=['ui'],
-    auto_init=False,
     links=[link('https://opendepot.localtest.me:8443', 'Provider Mirror TLS Proxy')],
     labels=['controls'],
 )
