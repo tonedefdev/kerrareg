@@ -115,7 +115,9 @@ http://<release-name>-dex.<namespace>.svc.cluster.local:5556/dex
 
 ## Recommended: Proxy Dex Through the Server
 
-By default, exposing Dex requires giving it its own public ingress and hostname. Set `server.oidc.dexProxy.enabled: true` instead to have the server reverse-proxy `/dex/*` requests to the bundled Dex service. Dex is never given its own ingress — operators expose only the existing `server.ingress` (or `ui.ingress`), which already routes `/dex` alongside the registry protocol paths.
+Starting with v0.10.0, `server.oidc.dexProxy.enabled` defaults to `true`. The server reverse-proxies `/dex/*` requests to the bundled Dex service, so Dex does not need its own public ingress or hostname. Operators expose only the existing `server.ingress` (or `ui.ingress`), which routes `/dex` alongside the registry protocol paths.
+
+Set `server.oidc.dexProxy.enabled: false` when using an external OIDC provider or a separately exposed Dex deployment. When OIDC is disabled, the proxy setting is ignored.
 
 Set Dex's `issuer` to the external, path-based URL the proxy will serve, and point `server.oidc.issuerUrl` at the exact same value:
 

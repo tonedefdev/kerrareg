@@ -60,10 +60,7 @@ spec:
         {{- if .Values.server.useBearerToken }}
         - --use-bearer-token
         {{- end }}
-        {{- if .Values.server.oidc.dexProxy.enabled }}
-        {{- if not .Values.server.oidc.enabled }}
-        {{- fail "server.oidc.dexProxy.enabled requires server.oidc.enabled=true" }}
-        {{- end }}
+        {{- if and .Values.server.oidc.enabled .Values.server.oidc.dexProxy.enabled }}
         {{- if not .Values.dex.enabled }}
         {{- fail "server.oidc.dexProxy.enabled requires dex.enabled=true" }}
         {{- end }}

@@ -11,7 +11,7 @@
 [![Helm](https://img.shields.io/badge/Helm_Chart-0.9.0-0F1689?logo=helm&logoColor=white)](https://github.com/tonedefdev/opendepot/tree/main/chart/opendepot)
 [![Docs](https://img.shields.io/badge/Docs-tonedefdev.github.io-047df1?logo=materialformkdocs&logoColor=white)](https://tonedefdev.github.io/opendepot/)
 
-A Kubernetes-native, self-hosted OpenTofu/Terraform module and provider registry that implements both the [Module Registry Protocol](https://opentofu.org/docs/internals/module-registry-protocol/) and the [Provider Registry Protocol](https://developer.hashicorp.com/terraform/internals/provider-registry-protocol). OpenDepot gives organizations complete control over distribution, versioning, and storage — without relying on the public registry.
+A Kubernetes-native, self-hosted OpenTofu/Terraform module and provider registry that implements the [Module Registry Protocol](https://opentofu.org/docs/internals/module-registry-protocol/), the [Provider Network Mirror Protocol](https://opentofu.org/docs/internals/provider-network-mirror-protocol/) and the [Provider Registry Protocol](https://opentofu.org/docs/internals/provider-registry-protocol/). OpenDepot gives organizations complete control over distribution, versioning, and storage — without relying on the public registry.
 
 Compatible with **OpenTofu** (all versions) and **Terraform** (v1.2+).
 

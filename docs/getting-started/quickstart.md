@@ -10,7 +10,7 @@ search:
 
 # Local Quickstart with Tilt
 
-The fastest way to run OpenDepot locally is the repository's [Tilt](https://tilt.dev/) environment. It creates a persistent Kind cluster and local image registry, builds the complete stack, configures local OIDC, and exposes the Registry Explorer at `http://opendepot.localtest.me:8080`.
+The fastest way to run OpenDepot locally is the repository's [Tilt](https://tilt.dev/) environment. It creates a persistent Kind cluster and local image registry, builds the complete stack, configures local OIDC, and exposes the Registry Explorer at `https://opendepot.localtest.me:8443/`.
 
 The environment includes:
 
@@ -66,7 +66,7 @@ The initial build downloads the development toolchain and Trivy components. Subs
 
 Wait until the `ui` resource is ready in the Tilt dashboard:
 
-- OpenDepot: [http://opendepot.localtest.me:8080](http://opendepot.localtest.me:8080)
+- OpenDepot: [https://opendepot.localtest.me:8443/](https://opendepot.localtest.me:8443/)
 - Tilt dashboard: [http://localhost:10350](http://localhost:10350)
 
 ## Step 2: Sign In
@@ -111,21 +111,21 @@ cd /tmp/opendepot-module-test
 
 cat > main.tf <<'EOF'
 module "key_pair" {
-  source  = "opendepot.localtest.me:8080/opendepot-system/terraform-aws-key-pair/aws"
+  source  = "opendepot.localtest.me:8443/opendepot-system/terraform-aws-key-pair/aws"
   version = "2.0.3"
 }
 EOF
 
 cat > .tofurc <<'EOF'
-host "opendepot.localtest.me:8080" {
+host "opendepot.localtest.me:8443" {
   services = {
-    "modules.v1"   = "http://opendepot.localtest.me:8080/opendepot/modules/v1/"
-    "providers.v1" = "http://opendepot.localtest.me:8080/opendepot/providers/v1/"
+    "modules.v1"   = "https://opendepot.localtest.me:8443//opendepot/modules/v1/"
+    "providers.v1" = "https://opendepot.localtest.me:8443//opendepot/providers/v1/"
     "login.v1" = {
       client      = "opendepot"
       grant_types = ["authz_code"]
-      authz       = "http://opendepot.localtest.me:8080/dex/auth"
-      token       = "http://opendepot.localtest.me:8080/dex/token"
+      authz       = "https://opendepot.localtest.me:8443//dex/auth"
+      token       = "https://opendepot.localtest.me:8443//dex/token"
       scopes      = ["openid", "email", "profile", "groups", "offline_access"]
       ports       = [10000, 10010]
     }
@@ -133,14 +133,14 @@ host "opendepot.localtest.me:8080" {
 }
 EOF
 
-TF_CLI_CONFIG_FILE=.tofurc tofu login opendepot.localtest.me:8080
+TF_CLI_CONFIG_FILE=.tofurc tofu login opendepot.localtest.me:8443
 TF_CLI_CONFIG_FILE=.tofurc tofu init
 ```
 
 Complete the browser login with `dev@example.com` and your local password. OpenTofu stores the token in its credentials file, then downloads the module through OpenDepot.
 
 !!! note
-    Keep the port in both the module source and `host` block. OpenTofu treats `opendepot.localtest.me` and `opendepot.localtest.me:8080` as different registry hosts.
+    Keep the port in both the module source and `host` block. OpenTofu treats `opendepot.localtest.me` and `opendepot.localtest.me:8443` as different registry hosts.
 
 ## Step 5: Test a Depot
 

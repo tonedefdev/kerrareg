@@ -151,7 +151,7 @@ server:
     # verification_uri, etc.) use the external, proxied address because that is
     # Dex's configured issuer. See the OIDC configuration guide for setup.
     dexProxy:
-      enabled: false
+      enabled: true
   image:
     repository: ghcr.io/tonedefdev/opendepot/server
     tag: ""  # Overrides global.image.tag when set
