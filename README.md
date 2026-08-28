@@ -25,8 +25,7 @@ Comprehensive documentation is available at **[tonedefdev.github.io/opendepot/](
 | [Quickstart](https://tonedefdev.github.io/opendepot/getting-started/quickstart/) | Get up and running locally in minutes |
 | [Helm Chart Reference](https://tonedefdev.github.io/opendepot/helm-chart/) | Full values reference for the OpenDepot Helm chart |
 | [Architecture](https://tonedefdev.github.io/opendepot/architecture/) | How OpenDepot works under the hood |
-| [Authentication](https://tonedefdev.github.io/opendepot/authentication/) | GitHub App and token-based auth |
-| [Kubernetes RBAC](https://tonedefdev.github.io/opendepot/rbac/) | Fine-grained access control for registry resources |
+| [Authentication](https://tonedefdev.github.io/opendepot/authentication/) | Dex and token-based auth |
 
 ## License
 
